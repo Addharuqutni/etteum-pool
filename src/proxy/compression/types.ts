@@ -47,6 +47,36 @@ export interface ImageDedupeConfig {
   enabled: boolean;
 }
 
+export type PonytailMode = "lite" | "full" | "ultra";
+
+/**
+ * Ponytail — Lazy-dev ruleset injection.
+ *
+ * Injects a "lazy senior dev" ruleset (adapted from
+ * https://github.com/DietrichGebert/ponytail, MIT) into the system prompt.
+ * Unlike other techniques this is ADDITIVE: it adds ~300-1400 tokens to the
+ * input. The payoff is fewer output tokens (shorter code, fewer tool calls)
+ * and corner-cutting markers the model leaves in its output for audit.
+ */
+export interface PonytailConfig {
+  enabled: boolean;
+  /** Ruleset intensity — lite/full/ultra trade overhead vs behavior change. */
+  mode: PonytailMode;
+  /** Per-provider override, e.g. { codex: false } skips injection for codex. */
+  providerOverrides: Record<string, boolean>;
+  /** Strip `ponytail:` markers from the stored response body. */
+  stripMarkersFromOutput: boolean;
+}
+
+export interface PonytailMarkerHit {
+  /** The ceiling/shortcut name, e.g. "O(n²) scan". */
+  ceiling: string;
+  /** Upgrade path text from the marker. */
+  upgradePath: string;
+  /** Where in the response the marker was found. */
+  location: "content" | "tool_input" | "tool_result";
+}
+
 export interface TSCConfig {
   enabled: boolean;
   /** Strip whitespace from tool JSON-schema (lossless). */

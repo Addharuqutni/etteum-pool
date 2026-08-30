@@ -19,22 +19,31 @@ function getOpenCodeConfigPath(): string {
 }
 
 function openCodeModelConfig(model: ProxyClientModel): Record<string, unknown> {
-  const modalities = inputModalities(model);
+  // Combo rows arrive from the integration endpoint without inputTokens /
+  // inputTypes (they are synthetic, owned_by "combo"). Fall back to text-only
+  // so the combo still lands in the generated config as a usable model.
+  const full: ProxyClientModel = {
+    id: model.id,
+    maxInputTokens: model.maxInputTokens ?? 200000,
+    maxOutputTokens: model.maxOutputTokens ?? 32000,
+    inputTypes: model.inputTypes ?? ["text"],
+  };
+  const modalities = inputModalities(full);
   const isReasoning =
-    model.id.toLowerCase().includes("thinking") ||
-    model.id.toLowerCase().includes("reasoning") ||
-    model.id.toLowerCase().includes("o1-") ||
-    model.id.toLowerCase().includes("o3-");
+    full.id.toLowerCase().includes("thinking") ||
+    full.id.toLowerCase().includes("reasoning") ||
+    full.id.toLowerCase().includes("o1-") ||
+    full.id.toLowerCase().includes("o3-");
 
   return {
-    name: model.id,
+    name: full.id,
     attachment: modalities.some((item) => item !== "text"),
     reasoning: isReasoning,
     temperature: !isReasoning,
     tool_call: true,
     limit: {
-      context: contextLimit(model),
-      output: outputLimit(model),
+      context: contextLimit(full),
+      output: outputLimit(full),
     },
     modalities: {
       input: modalities,

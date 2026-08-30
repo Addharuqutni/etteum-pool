@@ -6,7 +6,7 @@ import { providers } from "../../src/proxy/providers/registry";
  * Characterization test for model → provider routing.
  *
  * This locks the CURRENT behavior of getProviderForModel so the registry/ownsModel
- * refactor (Fase 1) can be proven behavior-identical. If you add or change a
+ * refactor can be proven behavior-identical. If you add or change a
  * provider's model patterns, update the matching case here on purpose — a failure
  * means routing for some OTHER provider shifted unintentionally.
  */
@@ -15,41 +15,25 @@ describe("getProviderForModel", () => {
     // canva
     ["canva-image", "canva"],
     ["CANVA-IMAGE", "canva"],
-    // qoder
-    ["qd-Lite", "qoder"],
-    ["qd-Qwen3.7-Max", "qoder"],
     // codex (must win over codebuddy for gpt-5-codex)
     ["codex-mini", "codex"],
     ["codex-gpt-5.5-xhigh", "codex"],
     ["gpt-5-codex", "codex"],
     ["gpt-5.5-xhigh", "codex"],
-    // kiro-pro
-    ["kp-opus-4.8", "kiro-pro"],
-    ["kp-sonnet-4.6-thinking", "kiro-pro"],
+    // grok-cli (Grok Build exact ids)
+    ["grok-4.5", "grok-cli"],
+    ["grok-4.5-high", "grok-cli"],
+    ["grok-4.5-medium", "grok-cli"],
+    ["grok-4.5-low", "grok-cli"],
     // codebuddy
     ["cb-claude-opus-4.6", "codebuddy"],
-    ["gpt-5", "codebuddy"],
-    ["gpt-5.1", "codebuddy"],
-    ["gemini-2.5-pro", "codebuddy"],
-    ["deepseek-v3-2-volc", "codebuddy"],
-    ["enowx-default", "codebuddy"],
-    ["kimi-k2.5", "codebuddy"],
-    // kiro (standard)
-    ["auto", "kiro"],
-    ["claude-haiku-4.5", "kiro"],
-    ["claude-sonnet-4", "kiro"],
-    ["claude-sonnet-4.5", "kiro"],
-    ["claude-sonnet-4.5-thinking", "kiro"],
-    ["deepseek-3.2", "kiro"],
-    ["glm-5", "kiro"],
-    ["glm-5-thinking", "kiro"],
-    ["minimax-m2.1", "kiro"],
-    ["qwen3-coder-next", "kiro"],
-    // claude fallback → kiro
-    ["claude-opus-4.1", "kiro"],
-    ["some-unknown-sonnet-model", "kiro"],
-    // unknown default → kiro
-    ["totally-unknown-model", "kiro"],
+    ["cb-sonnet-4.6", "codebuddy"],
+    // codebuddy-china
+    ["cbc-claude-opus-4.6", "codebuddy-china"],
+    // claude (assistant OAuth)
+    ["cc-sonnet-4.6", "claude"],
+    // byok
+    ["byok-gpt-5", "byok"],
   ];
 
   for (const [model, expected] of cases) {
@@ -58,11 +42,22 @@ describe("getProviderForModel", () => {
     });
   }
 
-  test("never routes to a removed provider (moclaw/zai/windsurf/pioneer)", () => {
-    const removed = new Set(["moclaw", "zai", "windsurf", "pioneer"]);
-    for (const m of ["ws-claude-4.5-sonnet", "zai-glm", "pio-default", "mo-auto", "moclaw-x"]) {
+  test("never routes to a removed provider (kiro/kiro-pro/qoder/gitlab-duo/youmind/moclaw/zai/windsurf/pioneer)", () => {
+    const removed = new Set([
+      "kiro", "kiro-pro", "qoder", "gitlab-duo", "youmind",
+      "moclaw", "zai", "windsurf", "pioneer",
+    ]);
+    for (const m of [
+      "auto", "claude-sonnet-4", "claude-haiku-4.5",
+      "kp-opus-4.8", "qd-Lite", "ym-coder",
+      "ws-claude-4.5-sonnet", "zai-glm", "pio-default", "mo-auto", "moclaw-x",
+    ]) {
       expect(removed.has(pool.getProviderForModel(m) as string)).toBe(false);
     }
+  });
+
+  test("unknown model resolves to null (no fallback provider)", () => {
+    expect(pool.getProviderForModel("totally-unknown-model") as string | null).toBeNull();
   });
 
   test("codex gpt-5.5-xhigh alias uses codex metadata", () => {

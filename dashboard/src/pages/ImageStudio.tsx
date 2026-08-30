@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import PageHeader from "@/components/layout/PageHeader";
 import {
   Sparkles,
   Send,
@@ -74,7 +75,6 @@ const ASPECT_RATIOS: Array<{ value: string; label: string; icon: string }> = [
 ];
 
 function labelProvider(provider: string) {
-  if (provider === "kiro-pro") return "Kiro Pro";
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
@@ -93,7 +93,7 @@ function timeAgo(ts: number) {
 
 export default function ImageStudio() {
   const [assistModels, setAssistModels] = useState<AssistModelInfo[]>([]);
-  const [assistModel, setAssistModel] = useState<string>("auto");
+  const [assistModel, setAssistModel] = useState<string>("cb-sonnet-4.6");
   const [genType, setGenType] = useState<GenType>("image");
   const [aspectRatio, setAspectRatio] = useState<string>("1:1");
   const [n, setN] = useState<number>(1);
@@ -370,46 +370,28 @@ export default function ImageStudio() {
   const totalImages = results.reduce((sum, r) => sum + r.urls.length, 0);
 
   return (
-    <div className="flex h-[calc(100vh-6rem)] md:h-[calc(100vh-3rem)] flex-col gap-4">
-      {/* Page Header */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-[var(--foreground)]">
-              Image Studio
-            </h1>
-            <p className="text-xs text-[var(--muted-foreground)]">
-              AI prompt assistant untuk Canva Magic Media
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {results.length > 0 && (
+    <div className="flex h-[calc(100vh-6rem)] flex-col gap-4 md:h-[calc(100vh-3rem)]">
+      <PageHeader
+        title="Image Studio"
+        meta={
+          results.length > 0 ? (
             <>
-              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
-                <ImageIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-                <span className="text-[var(--muted-foreground)]">
-                  <span className="font-medium text-[var(--foreground)]">{totalImages}</span> hasil
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5">
-                <Sparkles className="h-3.5 w-3.5 text-[var(--warning)]" />
-                <span className="text-[var(--muted-foreground)]">
-                  <span className="font-medium text-[var(--foreground)]">{totalCredits}</span> credits
-                </span>
-              </div>
+              <span>{totalImages} results</span>
+              <span aria-hidden className="text-[var(--border)]">·</span>
+              <span className="text-[var(--warning)]">{totalCredits} credits</span>
             </>
-          )}
-        </div>
-      </div>
+          ) : (
+            <span>prompt assistant for Canva Magic Media</span>
+          )
+        }
+      />
 
       {/* Main 2-column area: Chat | Preview */}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         {/* LEFT: Chat panel with settings strip on top */}
         <div className="flex h-full min-h-0 flex-col gap-2">
           {/* Settings strip — minimal, always visible above chat */}
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2 py-1.5">
+          <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 shadow-[var(--shadow-card)]">
             <Bot className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
             <div className="relative">
               <select
@@ -507,15 +489,15 @@ export default function ImageStudio() {
           </div>
 
           {/* Chat panel */}
-          <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card)]">
-          <div className="flex items-center justify-between border-b border-[var(--border)] bg-gradient-to-r from-[var(--card)] to-[var(--card)]/50 px-4 py-3">
+          <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)]">
+          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--primary)]/10">
                 <Bot className="h-4 w-4 text-[var(--primary)]" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold text-[var(--foreground)]">Prompt Assistant</h2>
-                <p className="text-[10px] text-[var(--muted-foreground)]">
+                <h2 className="eyebrow text-[var(--foreground)]">Prompt Assistant</h2>
+                <p className="mt-1 font-mono text-[10px] text-[var(--muted-foreground)]">
                   {messages.length === 0 ? "Siap bantu" : `${messages.length} pesan`}
                 </p>
               </div>
@@ -618,20 +600,20 @@ export default function ImageStudio() {
                 </div>
                 <div className="rounded-2xl rounded-tl-sm bg-[var(--secondary)] px-3.5 py-2.5">
                   <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--muted-foreground)] [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--muted-foreground)] [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--muted-foreground)]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--muted-foreground)] [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--muted-foreground)] [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--muted-foreground)]" />
                   </div>
                 </div>
               </div>
             )}
 
             {finalPrompt && (
-              <div className="rounded-lg border border-[var(--primary)]/30 bg-gradient-to-br from-[var(--primary)]/10 via-[var(--primary)]/5 to-transparent p-3">
+              <div className="rounded-md border border-[var(--primary)]/30 bg-gradient-to-br from-[var(--primary)]/10 via-[var(--primary)]/5 to-transparent px-3 py-3">
                 <div className="mb-1.5 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <Check className="h-3.5 w-3.5 text-[var(--primary)]" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--primary)]">
+                    <span className="eyebrow text-[var(--primary)]">
                       Final Prompt Ready
                     </span>
                   </div>
@@ -673,9 +655,9 @@ export default function ImageStudio() {
           </div>
 
           {error && (
-            <div className="border-t border-[var(--error)]/20 bg-[var(--error)]/10 px-3 py-2 text-xs text-[var(--error)]">
+            <p className="border-t border-l-2 border-t-[var(--border)] border-l-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-[11px] text-[var(--error)]">
               {error}
-            </div>
+            </p>
           )}
 
           {/* Input */}
@@ -690,7 +672,7 @@ export default function ImageStudio() {
                 }
               }}
               placeholder="Tulis ide gambarmu... (Enter to send, Shift+Enter for newline)"
-              className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] transition-colors focus:border-[var(--primary)]/40 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+              className="w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 text-[13px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
               rows={2}
             />
             <Button
@@ -714,16 +696,16 @@ export default function ImageStudio() {
           </div>
         </div>
 
-        {/* RIGHT: Preview panel */}
-        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card)]">
+        {/* RIGHT: Preview panel — the one elevated surface in this view */}
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-raised)]">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--success)]/10">
                 <ImageIcon className="h-4 w-4 text-[var(--success)]" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold text-[var(--foreground)]">Preview</h2>
-                <p className="text-[10px] text-[var(--muted-foreground)]">
+                <h2 className="eyebrow text-[var(--foreground)]">Preview</h2>
+                <p className="mt-1 font-mono text-[10px] text-[var(--muted-foreground)]">
                   {results.length === 0
                     ? "Belum ada hasil"
                     : `${results.length} ${results.length === 1 ? "generation" : "generations"}`}
@@ -772,10 +754,10 @@ export default function ImageStudio() {
                 return (
                   <div
                     key={r.id}
-                    className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--background)]/50"
+                    className="overflow-hidden rounded-md border border-[var(--border)] bg-[var(--background)]/50"
                   >
                     {/* Result header */}
-                    <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] p-3">
+                    <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
                       <div className="min-w-0 flex-1">
                         <p className="line-clamp-2 text-xs leading-relaxed text-[var(--foreground)]">
                           {r.prompt}
@@ -906,7 +888,7 @@ export default function ImageStudio() {
             </div>
 
             {generating && (
-              <div className="mt-5 overflow-hidden rounded-lg border border-dashed border-[var(--primary)]/40 bg-gradient-to-br from-[var(--primary)]/5 via-transparent to-fuchsia-500/5 p-8">
+              <div className="mt-4 overflow-hidden rounded-md border border-dashed border-[var(--primary)]/40 bg-gradient-to-br from-[var(--primary)]/5 via-transparent to-fuchsia-500/5 px-4 py-12">
                 <div className="text-center">
                   <div className="relative mx-auto mb-3 h-10 w-10">
                     <div className="absolute inset-0 animate-ping rounded-full bg-[var(--primary)]/30" />
@@ -915,7 +897,7 @@ export default function ImageStudio() {
                   <p className="text-sm font-medium text-[var(--foreground)]">
                     Generating {genType}...
                   </p>
-                  <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  <p className="mt-1.5 font-mono text-[11px] text-[var(--muted-foreground)]">
                     Canva Magic Media sedang melukis
                   </p>
                 </div>
@@ -943,7 +925,7 @@ export default function ImageStudio() {
           <img
             src={lightbox}
             alt="full"
-            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+            className="max-h-full max-w-full rounded-md object-contain shadow-[var(--shadow-raised)]"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

@@ -9,6 +9,7 @@ const Accounts = lazy(() => import("./pages/Accounts"));
 const AccountList = lazy(() => import("./pages/AccountList"));
 const ByokAccountList = lazy(() => import("./pages/ByokAccountList"));
 const Models = lazy(() => import("./pages/Models"));
+const Combos = lazy(() => import("./pages/Combos"));
 const ApiKey = lazy(() => import("./pages/ApiKey"));
 const Requests = lazy(() => import("./pages/Requests"));
 const Usage = lazy(() => import("./pages/Usage"));
@@ -22,7 +23,7 @@ const Integration = lazy(() => import("./pages/Integration"));
 const CodexOAuthCallback = lazy(() => import("./pages/CodexOAuthCallback"));
 
 function RouteFallback() {
-  return <div className="flex h-64 items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>;
+  return <div className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
 }
 
 export default function App() {
@@ -56,7 +57,7 @@ export default function App() {
   }
 
   if (authed === null) {
-    return <div className="flex h-screen items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>;
+    return <div className="flex h-screen items-center justify-center font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
   }
 
   if (!authed) {
@@ -72,6 +73,7 @@ export default function App() {
           <Route path="/accounts/byok/:prefix" element={<ByokAccountList />} />
           <Route path="/accounts/:provider" element={<AccountList />} />
           <Route path="/models" element={<Models />} />
+          <Route path="/combos" element={<Combos />} />
           <Route path="/api-key" element={<ApiKey />} />
           <Route path="/requests" element={<Requests />} />
           <Route path="/bot-logs" element={<BotLogs />} />

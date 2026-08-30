@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Eye, EyeOff, Lock } from "lucide-react";
+import { Eye, EyeOff } from "lucide-react";
 import { validateApiKey, API_BASE } from "@/lib/api";
 
 interface LoginProps {
@@ -18,7 +17,7 @@ export default function Login({ onLogin }: LoginProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!key.trim()) {
-      setError("Please enter an API key");
+      setError("Key required");
       return;
     }
 
@@ -30,55 +29,81 @@ export default function Login({ onLogin }: LoginProps) {
       localStorage.setItem("api_key", key.trim());
       onLogin();
     } else {
-      setError("Invalid API key");
+      setError("Key rejected — check the admin key and endpoint below");
     }
     setLoading(false);
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--background)] p-4">
-      <Card className="w-full max-w-sm border-[var(--border)]">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--primary)]/10">
-            <Lock className="h-6 w-6 text-[var(--primary)]" />
+    /* Off-center on purpose: the panel sits on a left-anchored column so it
+       reads as a terminal prompt, not a centered marketing hero. */
+    <div className="flex min-h-screen items-center justify-center p-4 sm:justify-start sm:px-[12vw]">
+      <div className="w-full max-w-[340px]">
+        {/* Wordmark line — mono, inline, no icon tile with a glow behind it */}
+        <div className="mb-5 flex items-baseline gap-2.5">
+          <img src="/etteum.svg" alt="" className="h-5 w-5 self-center" />
+          <span className="font-mono text-[15px] font-semibold tracking-[0.08em] text-[var(--foreground)]">
+            ETTEUM
+          </span>
+          <span className="eyebrow">proxy pool</span>
+        </div>
+
+        <div className="rounded-md border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-raised)]">
+          <div className="border-b border-[var(--border)] px-4 py-3">
+            <h1 className="eyebrow">Authenticate</h1>
           </div>
-          <CardTitle className="text-xl">Etteum</CardTitle>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Enter your API key to access the dashboard
-          </p>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="relative">
-              <Input
-                type={showKey ? "text" : "password"}
-                value={key}
-                onChange={(e) => { setKey(e.target.value); setError(null); }}
-                placeholder="sk-pool-..."
-                className="pr-10 font-mono text-sm"
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-              >
-                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+
+          <form onSubmit={handleSubmit} className="space-y-3 px-4 py-4">
+            <div>
+              <label htmlFor="api-key" className="eyebrow mb-1.5 block">
+                Admin key
+              </label>
+              <div className="relative">
+                <Input
+                  id="api-key"
+                  type={showKey ? "text" : "password"}
+                  value={key}
+                  onChange={(e) => { setKey(e.target.value); setError(null); }}
+                  placeholder="sk-pool-…"
+                  className="pr-9 font-mono"
+                  autoFocus
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? "api-key-error" : undefined}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+                  aria-label={showKey ? "Hide key" : "Show key"}
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             {error && (
-              <div className="rounded-md bg-[var(--error)]/10 p-3 text-sm text-[var(--error)]">
+              <p
+                id="api-key-error"
+                role="alert"
+                className="border-l-2 border-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-[11px] text-[var(--error)]"
+              >
                 {error}
-              </div>
+              </p>
             )}
 
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Verifying..." : "Login"}
+              {loading ? "Verifying…" : "Sign in"}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+
+          <div className="flex items-center gap-2 border-t border-[var(--border)] px-4 py-2">
+            <span className="eyebrow shrink-0">Endpoint</span>
+            <p className="truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+              {API_BASE || window.location.origin}
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

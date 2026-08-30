@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Eye, EyeOff, FlaskConical, Key, Plus, RefreshCw, Save, Trash2, Zap } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import PageHeader from "@/components/layout/PageHeader";
+import { ArrowLeft, Download, Eye, EyeOff, FlaskConical, Key, Plus, RefreshCw, Save, Trash2, Zap } from "lucide-react";
 import {
   deleteAccount,
+  fetchByokModels,
   fetchByokProviders,
   revealByokKey,
   testByokProvider,
@@ -55,6 +58,11 @@ export default function ByokAccountList() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingKey, setTestingKey] = useState<number | null>(null);
+  /** Per-key inline test result, keyed by key id. */
+  const [testResults, setTestResults] = useState<Record<number, { ok: boolean; latency?: number; error?: string }>>({});
+  /** Per-model inline test result, keyed by model id. */
+  const [modelTestResults, setModelTestResults] = useState<Record<string, { state: "testing" | "ok" | "error"; latency?: number; error?: string }>>({});
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [revealingKey, setRevealingKey] = useState<string | null>(null);
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set());
   const { message, setMessage, clearMessage } = useTimedMessage<string>(null, 4000);
@@ -231,10 +239,17 @@ export default function ByokAccountList() {
     setTestingKey(key.id);
     try {
       const res = await testByokProvider(key.id);
+      setTestResults((m) => ({
+        ...m,
+        [key.id!]: res.success
+          ? { ok: true, latency: res.latency_ms }
+          : { ok: false, error: res.error || "Connection test failed" },
+      }));
       if (res.success) showSuccess(`✓ ${key.label} OK${res.latency_ms ? ` · ${res.latency_ms}ms` : ""}`);
       else showError(new Error(res.error || "Connection test failed"));
       await load();
     } catch (err) {
+      if (key.id) setTestResults((m) => ({ ...m, [key.id!]: { ok: false, error: err instanceof Error ? err.message : "Connection test failed" } }));
       showError(err);
     } finally {
       setTestingKey(null);
@@ -247,164 +262,310 @@ export default function ByokAccountList() {
     }
   }
 
-  if (loading && !provider) {
-    return <div className="flex h-64 items-center justify-center text-sm text-[var(--muted-foreground)]">Loading BYOK provider...</div>;
+  async function testModel(model: string) {
+    if (!provider) return;
+    setModelTestResults((m) => ({ ...m, [model]: { state: "testing" } }));
+    try {
+      const res = await testByokProvider(provider.id, model);
+      setModelTestResults((m) => ({
+        ...m,
+        [model]: res.success
+          ? { state: "ok", latency: res.latency_ms }
+          : { state: "error", error: res.error || "Test failed" },
+      }));
+      if (res.auto_fixed) load();
+    } catch (err) {
+      setModelTestResults((m) => ({
+        ...m,
+        [model]: { state: "error", error: err instanceof Error ? err.message : "Test failed" },
+      }));
+    }
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-[var(--foreground)]">BYOK · {prefix}</h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">
-              {form.keys.length} keys · {activeKeyCount} enabled · {models.length} models · {lbLabel(form.load_balancing_method)}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={testAll} disabled={testingKey !== null || form.keys.every((k) => !k.id)}>
-            <FlaskConical className="w-4 h-4 mr-2" /> Test All
-          </Button>
-          <Button size="sm" onClick={saveSettings} disabled={saving}>
-            <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save Settings"}
-          </Button>
-        </div>
+  /** Resolve a usable API key secret for fetch-models (reveals masked keys when needed). */
+  async function firstUsableKey(): Promise<string | null> {
+    for (const key of form.keys) {
+      if (key.key && key.key !== MASK) return key.key.trim();
+      if (key.id && key.key === MASK) {
+        const revealed = await revealByokKey(key.id);
+        if (revealed.key) return revealed.key.trim();
+      }
+    }
+    return null;
+  }
+
+  async function fetchModels() {
+    if (!form.base_url.trim()) return showError(new Error("Base URL is required"));
+    const apiKey = await firstUsableKey();
+    if (!apiKey) return showError(new Error("At least one API key is required"));
+    setFetchingModels(true);
+    setError(null);
+    try {
+      const res = await fetchByokModels({
+        base_url: form.base_url.trim(),
+        api_key: apiKey,
+        format: form.format,
+      });
+      if (res.error) return showError(new Error(res.error));
+      const existing = new Set(models);
+      const added = (res.models || []).filter((m) => !existing.has(m));
+      if (added.length > 0) {
+        setForm((f) => ({ ...f, models: [...new Set([...models, ...added])].join(", ") }));
+        showSuccess(`Fetched ${res.models.length} models — added ${added.length} new`);
+      } else {
+        showSuccess(`Fetched ${res.models.length} models — all already configured`);
+      }
+    } catch (err) {
+      showError(err);
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  if (loading && !provider) {
+    return (
+      <div>
+        <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading BYOK provider...</p>
       </div>
+    );
+  }
+
+  // Chips: models from the textarea (live) + models discovered via /models.
+  const configuredModels = new Set(form.models.split(",").map((m) => m.trim()).filter(Boolean));
+  const modelChips = provider
+    ? [...new Set([...configuredModels, ...(provider.available_models || [])])]
+    : [];
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title={`BYOK · ${prefix}`}
+        meta={
+          <>
+            <span>{form.keys.length} keys</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span className={activeKeyCount > 0 ? "text-[var(--success)]" : undefined}>{activeKeyCount} enabled</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>{models.length} models</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>{lbLabel(form.load_balancing_method)}</span>
+          </>
+        }
+        actions={
+          <>
+            <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")} aria-label="Back to providers">
+              <ArrowLeft className="w-3.5 h-3.5" />
+            </Button>
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={testAll} disabled={testingKey !== null || form.keys.every((k) => !k.id)}>
+              <FlaskConical className="w-3.5 h-3.5" /> Test all
+            </Button>
+            <Button size="sm" onClick={saveSettings} disabled={saving}>
+              <Save className="w-3.5 h-3.5" /> {saving ? "Saving…" : "Save"}
+            </Button>
+          </>
+        }
+      />
 
       {(message || error) && (
-        <div className={`rounded-md p-3 text-sm ${message ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
+        <p
+          role="status"
+          className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}
+        >
           {message || error}
-        </div>
+        </p>
       )}
 
-      <Card className="border-[var(--border)]">
-        <CardHeader>
-          <CardTitle className="text-base">Provider Settings</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <Card>
+        <div className="border-b border-[var(--border)] px-4 py-3">
+          <h2 className="eyebrow">Provider Settings</h2>
+        </div>
+        <div className="space-y-3 px-4 py-3">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-[var(--foreground)]">Provider Prefix</label>
+            <div>
+              <label className="eyebrow mb-1.5 block">Provider Prefix</label>
               <Input value={prefix || ""} readOnly className="font-mono bg-[var(--muted)] opacity-70" />
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-[var(--foreground)]">Base URL</label>
-              <Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://api.provider.com/v1" />
+            <div>
+              <label className="eyebrow mb-1.5 block">Base URL</label>
+              <Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://api.provider.com/v1" className="font-mono" />
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-[var(--foreground)]">API Format</label>
-              <select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value as ApiFormat })} className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+            <div>
+              <label className="eyebrow mb-1.5 block">API Format</label>
+              <Select value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value as ApiFormat })}>
                 <option value="auto">Auto-detect</option>
                 <option value="openai">OpenAI-compatible</option>
                 <option value="anthropic">Anthropic</option>
-              </select>
+              </Select>
             </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-[var(--foreground)]">Load Balancing</label>
-              <select value={form.load_balancing_method} onChange={(e) => setForm({ ...form, load_balancing_method: e.target.value as LbMethod })} className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+            <div>
+              <label className="eyebrow mb-1.5 block">Load Balancing</label>
+              <Select value={form.load_balancing_method} onChange={(e) => setForm({ ...form, load_balancing_method: e.target.value as LbMethod })}>
                 <option value="round_robin">Round Robin</option>
                 <option value="sequential">Sequential</option>
-              </select>
-              <p className="text-xs text-[var(--muted-foreground)]">Round Robin rotates keys. Sequential prioritizes the first healthy key in table order.</p>
+              </Select>
+              <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Round Robin rotates keys. Sequential prioritizes the first healthy key in table order.</p>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium text-[var(--foreground)]">Models</label>
-            <textarea value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} className="w-full h-24 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)]" placeholder="gpt-4o, claude-sonnet, llama-3" />
-            <p className="text-xs text-[var(--muted-foreground)]">Comma-separated model IDs. Public model IDs become <span className="font-mono">{prefix || "prefix"}-model</span>.</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-[var(--border)]">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-base">API Keys</CardTitle>
-          <Button variant="outline" size="sm" onClick={addKey}>
-            <Plus className="w-4 h-4 mr-2" /> Add Key
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[var(--border)]">
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Key Label</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Secret</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Status</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Enabled</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Last Used</th>
-                  <th className="p-4 text-left text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {form.keys.map((key, index) => {
-                  const visibilityId = secretVisibilityId(key, index);
-                  const secretVisible = visibleSecrets.has(visibilityId);
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label className="eyebrow">Models</label>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={fetchModels} disabled={fetchingModels} title="Fetch model list from this base URL + API key">
+                  {fetchingModels ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  {fetchingModels ? "Fetching..." : "Fetch Models"}
+                </Button>
+                <p className="font-mono text-[10px] text-[var(--muted-foreground)]/70">⚡ to test</p>
+              </div>
+            </div>
+            <textarea value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} className="h-24 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35" placeholder="gpt-4o, claude-sonnet, llama-3" />
+            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Comma-separated model IDs. Public model IDs become <span className="text-[var(--foreground)]">{prefix || "prefix"}-model</span>.</p>
+            {modelChips.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-2">
+                {modelChips.map((model) => {
+                  const mt = modelTestResults[model];
+                  const configured = configuredModels.has(model);
                   return (
-                  <tr key={`${key.id || "new"}-${index}`} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--secondary)]/40">
-                    <td className="p-4">
-                      <Input value={key.label} onChange={(e) => updateKey(index, { label: e.target.value })} className="h-8 min-w-[140px] font-mono text-xs" />
-                      {form.load_balancing_method === "sequential" && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">Priority #{index + 1}</div>}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex min-w-[260px] items-center gap-1">
-                        <Input
-                          type={secretVisible ? "text" : "password"}
-                          value={key.key}
-                          onChange={(e) => updateKey(index, { key: e.target.value })}
-                          onFocus={() => { if (key.key === MASK) updateKey(index, { key: "" }); }}
-                          placeholder={key.id ? "Keep masked or paste new key" : "sk-..."}
-                          className="h-8 font-mono text-xs"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => toggleSecretVisibility(key, index)}
-                          disabled={revealingKey === visibilityId}
-                          title={secretVisible ? "Hide key" : "Show key"}
-                        >
-                          {revealingKey === visibilityId ? <RefreshCw className="h-4 w-4 animate-spin" /> : secretVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </Button>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <Badge variant={key.status === "error" ? "error" : key.status === "active" ? "success" : "secondary"}>{key.status || (key.id ? "active" : "new")}</Badge>
-                      {key.errorMessage && <div className="mt-1 max-w-[220px] truncate text-xs text-[var(--error)]" title={key.errorMessage}>{key.errorMessage}</div>}
-                    </td>
-                    <td className="p-4">
-                      <button type="button" onClick={() => toggleKey(key, index)} className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${key.enabled ? "bg-[var(--success)]" : "bg-[var(--secondary)]"}`}>
-                        <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${key.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+                    <span
+                      key={model}
+                      className={`inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 font-mono text-xs ${
+                        mt?.state === "error"
+                          ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error)]"
+                          : mt?.state === "ok"
+                            ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]"
+                            : configured
+                              ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary)]/80"
+                              : "border-dashed border-[var(--border)] bg-transparent text-[var(--muted-foreground)]"
+                      }`}
+                      title={mt?.error || (configured ? model : `${model} (discovered, not in routing list)`)}
+                    >
+                      <span className="truncate">{model}</span>
+                      {mt?.state === "ok" && mt.latency != null && (
+                        <span className="shrink-0 tabular-nums opacity-80">{mt.latency}ms</span>
+                      )}
+                      <button
+                        type="button"
+                        className="shrink-0 cursor-pointer rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100"
+                        aria-label={`Test ${model}`}
+                        title={`Test ${model}`}
+                        disabled={mt?.state === "testing"}
+                        onClick={() => testModel(model)}
+                      >
+                        {mt?.state === "testing" ? (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Zap className="h-3 w-3" />
+                        )}
                       </button>
-                    </td>
-                    <td className="p-4 text-xs text-[var(--muted-foreground)]">{formatDate((provider?.keys || []).find((k: ByokKeyInfo) => k.id === key.id)?.lastUsedAt)}</td>
-                    <td className="p-4">
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => testKey(key)} disabled={testingKey === key.id || !key.id} title="Test key">
-                          {testingKey === key.id ? <RefreshCw className="w-4 h-4 animate-spin text-[var(--info)]" /> : <Zap className="w-4 h-4 text-[var(--info)]" />}
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => removeKey(index)} title="Delete key">
-                          <Trash2 className="w-4 h-4 text-[var(--error)]" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                    </span>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            )}
           </div>
-        </CardContent>
+        </div>
+      </Card>
+
+      {/* Primary surface: the key table */}
+      <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+          <h2 className="eyebrow">API Keys</h2>
+          <Button variant="outline" size="sm" onClick={addKey}>
+            <Plus className="w-3.5 h-3.5" /> Add Key
+          </Button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse font-mono text-[12px]">
+            <thead className="sticky-head">
+              <tr>
+                <th className="eyebrow px-4 py-2 text-left">Key Label</th>
+                <th className="eyebrow px-4 py-2 text-left">Secret</th>
+                <th className="eyebrow px-4 py-2 text-left">Status</th>
+                <th className="eyebrow px-4 py-2 text-left">Enabled</th>
+                <th className="eyebrow px-4 py-2 text-left">Last Used</th>
+                <th className="eyebrow px-4 py-2 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {form.keys.map((key, index) => {
+                const visibilityId = secretVisibilityId(key, index);
+                const secretVisible = visibleSecrets.has(visibilityId);
+                return (
+                <tr key={`${key.id || "new"}-${index}`} className="border-t border-[var(--hairline)] hover:bg-[var(--secondary)]/50 transition-colors duration-150">
+                  <td className="px-4 py-2">
+                    <Input value={key.label} onChange={(e) => updateKey(index, { label: e.target.value })} className="h-8 min-w-[140px] font-mono text-xs" />
+                    {form.load_balancing_method === "sequential" && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">Priority #{index + 1}</div>}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex min-w-[260px] items-center gap-1">
+                      <Input
+                        type={secretVisible ? "text" : "password"}
+                        value={key.key}
+                        onChange={(e) => updateKey(index, { key: e.target.value })}
+                        onFocus={() => { if (key.key === MASK) updateKey(index, { key: "" }); }}
+                        placeholder={key.id ? "Keep masked or paste new key" : "sk-..."}
+                        className="h-8 font-mono text-xs"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        onClick={() => toggleSecretVisibility(key, index)}
+                        disabled={revealingKey === visibilityId}
+                        title={secretVisible ? "Hide key" : "Show key"}
+                      >
+                        {revealingKey === visibilityId ? <RefreshCw className="h-4 w-4 animate-spin" /> : secretVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2">
+                    <Badge variant={key.status === "error" ? "error" : key.status === "active" ? "success" : "secondary"}>{key.status || (key.id ? "active" : "new")}</Badge>
+                    {key.errorMessage && <div className="mt-1 max-w-[220px] truncate text-[11px] text-[var(--error)]" title={key.errorMessage}>{key.errorMessage}</div>}
+                    {key.id && testResults[key.id] && (
+                      <div
+                        className={`mt-1 font-mono text-[10px] tabular-nums ${testResults[key.id].ok ? "text-[var(--success)]" : "text-[var(--error)]"}`}
+                        title={testResults[key.id].error || "Last test result"}
+                      >
+                        {testResults[key.id].ok
+                          ? `✓ ${testResults[key.id].latency ? `${testResults[key.id].latency}ms` : "OK"}`
+                          : `✗ ${testResults[key.id].error}`}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={key.enabled}
+                      aria-label={`${key.enabled ? "Disable" : "Enable"} key ${key.label}`}
+                      onClick={() => toggleKey(key, index)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${key.enabled ? "bg-[var(--success)]" : "bg-[var(--secondary)]"}`}
+                    >
+                      <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${key.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
+                    </button>
+                  </td>
+                  <td className="px-4 py-2 text-[11px] tabular-nums text-[var(--muted-foreground)]">{formatDate((provider?.keys || []).find((k: ByokKeyInfo) => k.id === key.id)?.lastUsedAt)}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => testKey(key)} disabled={testingKey === key.id || !key.id} title="Test key">
+                        {testingKey === key.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-[var(--info)]" /> : <Zap className="w-3.5 h-3.5 text-[var(--info)]" />}
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => removeKey(index)} title="Delete key" className="hover:text-[var(--destructive)]">
+                        <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </Card>
     </div>
   );

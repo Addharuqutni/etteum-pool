@@ -13,24 +13,33 @@ per-request savings to `request_logs.compression_stats` for telemetry.
 ## Pipeline order
 
 ```
-sanitizeRequest()          (existing — strips Claude Code identity etc.)
+sanitizeRequest()          (existing — strips the assistant identity etc.)
         │
         ▼
-┌─── compressRequest() ────────────────────────────┐
-│  1. DCP          (lossless)  dedup repeat tools   │
-│  2. RTK          (lossy)     truncate tool output │
-│  3. Caveman      (lossy)     compact system prompt│
-│  4. Image dedupe (lossless)  dedup repeat images  │
-│  5. Cache markers (struct)   tag cacheable prefix │
-└──────────────────────────────────────────────────┘
+┌─── compressRequest() ─────────────────────────────────────────────┐
+│  0. TSC          (lossless)  tool schema compaction                │
+│  1. DCP          (lossless)  dedup repeat tools                    │
+│  2. RTK          (lossy)     truncate tool output                  │
+│  3. Caveman      (lossy)     compact system prompt                 │
+│  4. Ponytail     (additive)  inject lazy-dev ruleset               │
+│  5. Image dedupe (lossless)  dedup repeat images                   │
+│  6. Cache markers (struct)   tag cacheable prefix                  │
+└────────────────────────────────────────────────────────────────────┘
         │
         ▼
 routeRequest()             (existing — picks account, retries, etc.)
+        │
+        ▼
+scanPonytailMarkers()      (existing — scans response for ponytail: markers)
 ```
 
 Lossless techniques run first so lossy steps don't waste cycles compressing
-text that was about to be removed anyway. Cache markers run last because
-they tag whatever the final prefix shape is.
+text that was about to be removed anyway. Ponytail runs after Caveman so the
+system prompt is already compacted before the ruleset is appended. Cache
+markers run last because they tag whatever the final prefix shape is.
+
+If anything in the pipeline throws, the original sanitized request is
+forwarded as a fallback — compression failure never breaks a real request.
 
 If anything in the pipeline throws, the original sanitized request is
 forwarded as a fallback — compression failure never breaks a real request.
@@ -169,11 +178,64 @@ sometimes more confident-but-wrong outputs).
 
 ---
 
-### 4. Image Dedupe *(lossless, default ON)*
+### 4. Ponytail — Lazy Dev Ruleset Injection *(additive, default OFF)*
+
+Injects a "lazy senior dev" ruleset into the system prompt to steer the
+model toward writing less code (YAGNI ladder, shortest-diff-wins, no
+unrequested abstractions). Ruleset adapted from
+[DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail) (MIT).
+
+> ⚠️ **This technique is ADDITIVE** — it *adds* ~300–1 400 tokens to the
+> system prompt (negative `saved` in `byTechnique.ponytail`). The payoff
+> comes on the **output side**: the model writes shorter diffs, fewer
+> tool calls, and tags deliberate corner-cuts with `ponytail:` markers
+> that are scanned from the response for telemetry.
+
+**Three modes** (increasing aggressiveness):
+
+| Mode  | ~Tokens added | Content                                                       |
+| ----- | ------------- | ------------------------------------------------------------- |
+| lite  | ~300          | YAGNI ladder + 5 core rules. Minimal behaviour change.        |
+| full  | ~800          | lite + all rules + marker instructions.                       |
+| ultra | ~1 400        | full + 5-tag review taxonomy (delete/stdlib/native/yagni/shrink) + worked examples. |
+
+**Marker format.** When the model deliberately cuts a corner with a known
+ceiling, it is instructed to emit:
+
+```
+ponytail: <ceiling-name>, <upgrade-path>
+```
+
+Example: `// ponytail: O(n²) scan, replace with indexed lookup when n>1000`
+
+The proxy scans the response (content, tool_calls) for these markers and
+records them in `compressionStats.ponytail.markerHits`. When
+`stripMarkersFromOutput` is on, markers are removed from the stored
+response body (they remain in the telemetry).
+
+**Settings:**
+
+| Setting                                   | Default | Type                          | Notes                                                      |
+| ----------------------------------------- | ------- | ----------------------------- | --------------------------------------------------------- |
+| `compression_ponytail_enabled`            | `false` | bool                          | Master switch. OFF because it changes model behaviour.    |
+| `compression_ponytail_mode`               | `lite`  | `lite` \| `full` \| `ultra`   | Ruleset intensity.                                         |
+| `compression_ponytail_provider_overrides` | `{}`    | JSON `{provider: bool}`       | Skip injection for specific providers.                    |
+| `compression_ponytail_strip_markers`      | `false` | bool                          | Remove `ponytail:` markers from stored response body.     |
+
+**Why default OFF.** Same reasoning as Caveman: it changes model behaviour.
+The `lite` ruleset is relatively safe (just YAGNI discipline), but we
+prefer opt-in for anything that alters the model's voice.
+
+---
+
+### 5. Image Dedupe *(lossless, default ON)*
 
 Detects duplicate images attached more than once in a single request and
-replaces later occurrences with `[duplicate of image in message #N]`. Pure
-fingerprint — no decoding, no resize.
+replaces later occurrences with `[duplicate of image in message #N]`.
+
+**Fingerprint.** `length + first 64 chars + last 64 chars` of the base64
+data, or the URL itself for URL-style images. Collision-resistant for the
+"same screenshot pasted twice" case which is what we actually see.
 
 **Fingerprint.** `length + first 64 chars + last 64 chars` of the base64
 data, or the URL itself for URL-style images. Collision-resistant for the

@@ -52,7 +52,13 @@ Bun.serve({
 
     if (await file.exists()) {
       return new Response(file, {
-        headers: { "Content-Type": getMimeType(pathname) },
+        headers: {
+          "Content-Type": getMimeType(pathname),
+          // Don't cache HTML so rebuilt bundles are picked up on refresh.
+          ...(getMimeType(pathname).includes("text/html")
+            ? { "Cache-Control": "no-cache" }
+            : {}),
+        },
       });
     }
 
@@ -62,14 +68,25 @@ Bun.serve({
       file = Bun.file(filePath);
       if (await file.exists()) {
         return new Response(file, {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache",
+          },
         });
       }
     }
 
-    // SPA fallback: serve index.html for any non-file route
+    // SPA fallback: serve index.html only for non-static-asset routes.
+    // Missing .js/.css files are old hashed bundles → 404 so the browser
+    // knows to fetch the current index and its fresh chunks.
+    if (pathname.includes(".")) {
+      return new Response("Not Found", { status: 404 });
+    }
     return new Response(Bun.file(indexFile), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
     });
   },
 });

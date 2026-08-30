@@ -11,9 +11,10 @@ import {
   openAIToAnthropic,
   type AnthropicMessagesRequest,
 } from "./transforms/anthropic";
-import { isBadUpstreamRequest, isInvalidModelError } from "./errors";
+import { getSseError, isBadUpstreamRequest, isInvalidModelError, isNonAccountRequestError } from "./errors";
 import { prepareLogBody } from "./logging";
 import { resolveModelAlias } from "./model-mapping";
+import { resolveCombo, getCombosCached } from "./combos";
 import { eq, sql } from "drizzle-orm";
 import { providerList, refreshByokModels } from "./providers/registry";
 
@@ -96,9 +97,15 @@ export async function recordRequest(entry: NewRequestLog) {
   }
 }
 
-function normalizeModelId(model: string): string {
-  // Common typo seen from clients: "sonet" -> canonical Anthropic "sonnet".
-  return model.replace(/claude-sonet/gi, "claude-sonnet");
+/** Strip Claude Code context tags + common typos before routing. */
+export function normalizeModelId(model: string): string {
+  // Claude Code appends context-window tags (e.g. "[1m]", "[200k]") for auto-mode
+  // classifier / long-context picks. Upstream BYOK providers (Grok, etc.) reject them.
+  // Common typo: "sonet" -> "sonnet".
+  return model
+    .replace(/^etteum\//i, "") // integration configs prefix "etteum/"; combo names + pool ids are unprefixed
+    .replace(/\[[\d.]+[kKmM]\]$/g, "")
+    .replace(/claude-sonet/gi, "claude-sonnet");
 }
 
 
@@ -236,6 +243,117 @@ async function logProxyError(entry: NewRequestLog, label: string) {
   }
 }
 
+/**
+ * Log an intermediate combo fallback failure (target failed, next target
+ * attempted). The final failure of a combo is logged by the route's error
+ * handler (last target wins), so every distinct failure lands exactly once.
+ */
+async function logComboFallbackError(body: ChatCompletionRequest, error: unknown) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const provider = pool.getProviderForModel(body.model) || "unknown";
+  await logProxyError({
+    provider,
+    model: body.model,
+    status: "error",
+    errorMessage,
+    requestBody: prepareLogBody({
+      ...body,
+      _poolprox: { originalModel: body.model, combo: body.model },
+    }),
+    responseBody: prepareLogBody({ error: errorMessage }),
+    durationMs: 0,
+  }, "combo fallback error");
+}
+
+/**
+ * Read the start of an upstream SSE stream until a decision is possible:
+ *   - an upstream error event arrives before content → cancel the reader,
+ *     return the error message (caller throws so combo fallback can retry)
+ *   - valid content starts, or the stream ends cleanly → return a stream that
+ *     re-emits the already-read chunks and continues reading (nothing lost)
+ * ponytail: no peek deadline — a silent upstream delays the response start;
+ * add a bounded wait + read plumbing if that ever measures up.
+ */
+async function peekStreamForError(
+  stream: ReadableStream<Uint8Array>
+): Promise<{ error?: string; stream: ReadableStream<Uint8Array> }> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  let buffer = "";
+  let error: string | undefined;
+  let contentStarted = false;
+
+  try {
+    while (!error && !contentStarted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
+        const trimmedPayload = payload.trim();
+        if (!trimmedPayload || trimmedPayload === "[DONE]") continue;
+        // First decision in event order wins: an error seen before content
+        // enables fallback; once content starts, never fall back.
+        if (!error) error = getSseError(trimmedPayload) ?? undefined;
+        if (extractStreamContent(trimmedPayload)) contentStarted = true;
+        if (error || contentStarted) break;
+      }
+    }
+  } catch (readError) {
+    // Upstream connection dropped mid-peek — an upstream failure, not a
+    // content error. Propagate so the caller's combo fallback can run.
+    try {
+      await reader.cancel();
+    } catch {
+      // already closed
+    }
+    throw readError;
+  }
+
+  if (error) {
+    try {
+      await reader.cancel();
+    } catch {
+      // already closed
+    }
+    return { error, stream };
+  }
+
+  // No pre-content error — replay the peeked chunks, then continue reading.
+  let i = 0;
+  return {
+    stream: new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          while (i < chunks.length) controller.enqueue(chunks[i]!);
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          controller.close();
+        } catch (enqueueError) {
+          controller.error(enqueueError);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } catch {
+          // upstream already closed
+        }
+      },
+    }),
+  };
+}
+
 function wrapStreamWithUsageFinalizer(
   stream: ReadableStream<Uint8Array>,
   context: {
@@ -251,7 +369,6 @@ function wrapStreamWithUsageFinalizer(
     fallbackTotalTokens: number;
     fallbackCreditsUsed: number;
     fallbackCreditSource: CreditSource;
-    useFreeCounter: boolean;
   }
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
@@ -275,26 +392,10 @@ function wrapStreamWithUsageFinalizer(
       if (!trimmed.startsWith("data:")) continue;
       const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
 
-      // Detect upstream errors in SSE stream (Qoder 403 in body, OpenAI error format)
+      // Detect upstream errors in SSE stream (upstream_error body, OpenAI error format)
       const trimmedPayload = payload.trim();
-      if (trimmedPayload && trimmedPayload !== "[DONE]") {
-        try {
-          const parsed = JSON.parse(trimmedPayload);
-          // Qoder upstream error: { type: "upstream_error", error: "message" }
-          if (parsed.type === "upstream_error") {
-            streamError = true;
-          }
-          // Qoder format: {"code":"112","statusCodeValue":403,"message":"..."}
-          if (parsed.statusCodeValue && parsed.statusCodeValue >= 400) {
-            streamError = true;
-          }
-          // OpenAI format: {"error": {"message": "...", "type": "..."}}
-          if (parsed.error && (typeof parsed.error === "object" || typeof parsed.error === "string")) {
-            streamError = true;
-          }
-        } catch {
-          // not JSON, skip
-        }
+      if (trimmedPayload && trimmedPayload !== "[DONE]" && getSseError(trimmedPayload)) {
+        streamError = true;
       }
 
       // Always extract content for estimation, even if no usage field
@@ -328,23 +429,8 @@ function wrapStreamWithUsageFinalizer(
 
     void (async () => {
       try {
-        const isQoder = context.provider === "qoder";
-
-        // If stream had upstream error (403 rate limit, empty stream, etc), don't decrement quota
-        // and mark account exhausted for Qoder — but verify with a probe first.
-        // Stream errors on Qoder are a noisy signal: rate-limit-per-second,
-        // signature replay protection, transient auth all surface as 403.
-        // The qd-Lite probe is the authoritative arbiter.
+        // If stream had upstream error (403 rate limit, empty stream, etc), don't decrement quota.
         if (streamError) {
-          if (isQoder) {
-            // Trust upstream: if Qoder returned a stream error (typically a
-            // 403 due to genuine quota exhaustion or rate-limit), mark the
-            // account exhausted immediately. Warmup will flip it back to
-            // active once Qoder reports available quota again. No probe —
-            // we'd rather pay the occasional false-exhaust (lifted on the
-            // very next warmup tick) than serve a known-bad account.
-            await pool.markExhausted(context.accountId);
-          }
           // Still update request log with error status
           if (context.logId) {
             await db
@@ -359,14 +445,9 @@ function wrapStreamWithUsageFinalizer(
           return;
         }
 
-        // Decrement at stream finalization. Qoder free-bucket (qmodel_latest)
-        // charges 1 request per call; other Qoder buckets stay unchanged
-        // (no local counter — server is sole truth). Non-Qoder providers
-        // keep existing token-based decrement.
+        // Decrement at stream finalization (token-based).
         let quotaAfter = context.quotaBefore;
-        if (isQoder && context.useFreeCounter && context.quotaBefore > 0) {
-          quotaAfter = await pool.decrementFreeQuota(context.accountId, 1);
-        } else if (!isQoder && context.quotaBefore > 0) {
+        if (context.quotaBefore > 0) {
           quotaAfter = await pool.decrementQuota(context.accountId, creditsUsed);
         }
 
@@ -463,52 +544,74 @@ function wrapStreamWithUsageFinalizer(
 }
 
 async function handleChatCompletion(body: ChatCompletionRequest) {
-  // Rewrite the incoming model id to its mapped target (CLI integration, e.g.
-  // Claude Code's hardcoded haiku/sonnet/opus ids -> a model in the pool).
+  // Resolve combos FIRST: an exact combo name wins over model aliasing. The
+  // combo loop tries each target in order, falling back to the next on failure.
+  // (routeRequest still retries accounts within a provider; this adds the
+  // cross-model fallback on top. router.ts is untouched.)
+  const comboName = resolveCombo(body.model);
+  if (comboName) {
+    let lastError: unknown = null;
+    for (let i = 0; i < comboName.length; i++) {
+      const target = comboName[i]!; // parseTargets guarantees 1..10 entries
+      const attemptBody: ChatCompletionRequest = { ...body, model: target };
+      try {
+        return await handleChatCompletionSingle(attemptBody, { originalModel: body.model, combo: body.model });
+      } catch (error) {
+        // Permanent request errors (bad model, content moderation, malformed
+        // request) fail on every target — don't waste the remaining targets.
+        if (isNonAccountRequestError(error instanceof Error ? error.message : String(error))) {
+          throw error;
+        }
+        if (i < comboName.length - 1) {
+          await logComboFallbackError(attemptBody, error);
+        }
+        lastError = error;
+      }
+    }
+    throw lastError; // all targets failed — surfaced by the route's error handler
+  }
+
+  // No combo: existing alias rewrite + single route path, unchanged.
   body = { ...body, model: resolveModelAlias(normalizeModelId(body.model)) };
-  const isStream = body.stream === true;
+  return handleChatCompletionSingle(body, undefined);
+}
+
+async function handleChatCompletionSingle(
+  body: ChatCompletionRequest,
+  comboMeta: { originalModel: string; combo: string } | undefined
+) {
+const isStream = body.stream === true;
   const { result, account, provider, durationMs, compressionStats } = await routeRequest(body, isStream);
   let shouldReleaseTracking = true;
 
   try {
+    // Detect upstream SSE errors BEFORE returning the stream so combo fallback
+    // can still fire. Once valid content has started, pass through untouched.
+    if (isStream && result.stream) {
+      const peek = await peekStreamForError(result.stream);
+      if (peek.error) throw new Error(peek.error);
+      result.stream = peek.stream;
+    }
+
     const promptTokens = result.promptTokens || result.response?.usage?.prompt_tokens || estimateMessagesTokens(body.messages);
     const completionTokens = result.completionTokens || result.response?.usage?.completion_tokens || 0;
     const totalTokens = result.tokensUsed || result.response?.usage?.total_tokens || promptTokens + completionTokens;
 
-  const { creditsUsed, creditSource } = computeCredits(
-    provider,
-    body.model,
-    totalTokens,
-    result.creditsUsed,
-    result.creditSource
-  );
+    const { creditsUsed, creditSource } = computeCredits(
+      provider,
+      body.model,
+      totalTokens,
+      result.creditsUsed,
+      result.creditSource
+    );
 
-    // Qoder: server IS the source of truth, but we now also decrement the
-    // local `freeRemaining` counter optimistically for free-bucket models
-    // (qmodel_latest). This gives the dashboard real-time numbers instead of
-    // waiting for the next warmup mirror. The warmup runner still overrides
-    // both columns from /activity each cycle, so any local drift is
-    // self-correcting.
-    const isQoder = provider === "qoder";
-    const qoderProvider = providers["qoder"] as { isFreeModel?: (m: string) => boolean } | undefined;
-    const useFreeCounter = isQoder && qoderProvider?.isFreeModel?.(body.model) === true;
+    const quotaBefore = Number(account.quotaRemaining || 0);
 
-    const quotaBefore = isQoder
-      ? useFreeCounter
-        ? Number(account.freeRemaining ?? 0)
-        : Number(account.quotaRemaining || 0)
-      : Number(account.quotaRemaining || 0);
-
-    // For non-stream paths, decrement immediately. Stream paths and the
-    // Qoder paid bucket (where we don't track usage locally) stay unchanged.
+    // For non-stream paths, decrement immediately. Stream paths decrement at
+    // finalization (in wrapStreamWithUsageFinalizer).
     let quotaAfter = quotaBefore;
-    if (!isStream) {
-      if (isQoder && useFreeCounter && quotaBefore > 0) {
-        // Qoder /activity bucket charges 1 request per call regardless of token count.
-        quotaAfter = await pool.decrementFreeQuota(account.id, 1);
-      } else if (!isQoder && quotaBefore > 0) {
-        quotaAfter = await pool.decrementQuota(account.id, creditsUsed);
-      }
+    if (!isStream && quotaBefore > 0) {
+      quotaAfter = await pool.decrementQuota(account.id, creditsUsed);
     }
 
   const logEntry = {
@@ -528,6 +631,7 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
         creditSource,
         creditUnit: providers[provider].getProviderCreditUnit(body.model),
         creditRate: providers[provider].getProviderCreditRate(body.model),
+        ...(comboMeta ? { originalModel: comboMeta.originalModel, combo: comboMeta.combo } : {}),
       },
     }),
     responseBody: prepareLogBody(result.response),
@@ -558,7 +662,6 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
       fallbackTotalTokens: totalTokens,
       fallbackCreditsUsed: creditsUsed,
       fallbackCreditSource: creditSource,
-      useFreeCounter,
     });
 
       shouldReleaseTracking = false;
@@ -593,9 +696,17 @@ proxyRouter.get("/v1/models", async (c) => {
   // Without this, the sync getModels() returns stale/empty supportedModels.
   await refreshByokModels();
   const models = getAllModels();
+  // Merge combos as synthetic model entries after the real models so clients
+  // can discover and request the virtual combo names.
+  const comboEntries = getCombosCached().map((combo) => ({
+    id: combo.name,
+    object: "model" as const,
+    created: Math.floor(new Date(combo.createdAt).getTime() / 1000),
+    owned_by: "combo",
+  }));
   return c.json({
     object: "list",
-    data: models,
+    data: [...models, ...comboEntries],
   });
 });
 
@@ -661,9 +772,11 @@ proxyRouter.post("/v1/chat/completions", async (c) => {
     // Return JSON response
     return c.json(result.response);
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
-    const mappedModel = resolveModelAlias(normalizeModelId(body.model));
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const comboFailed = resolveCombo(body.model);
+    // When body.model was a combo, the final attempt (last target) is the real
+    // model requested; otherwise fall through to the alias rewrite as before.
+    const mappedModel = comboFailed ? comboFailed[comboFailed.length - 1]! : resolveModelAlias(normalizeModelId(body.model));
 
     // Log the error without masking the original proxy failure.
     const provider = pool.getProviderForModel(mappedModel) || "unknown";
@@ -672,7 +785,11 @@ proxyRouter.post("/v1/chat/completions", async (c) => {
       model: mappedModel,
       status: "error",
       errorMessage,
-      requestBody: prepareLogBody({ ...body, model: mappedModel, _poolprox: { originalModel: body.model } }),
+      requestBody: prepareLogBody({
+        ...body,
+        model: mappedModel,
+        _poolprox: { originalModel: body.model, ...(comboFailed ? { combo: body.model } : {}) },
+      }),
       responseBody: prepareLogBody({ error: errorMessage }),
       durationMs: 0,
     }, "chat completion error");
@@ -740,14 +857,21 @@ proxyRouter.post("/v1/messages", async (c) => {
     return c.json(openAIToAnthropic(result.response, body));
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const mappedModel = resolveModelAlias(normalizeModelId(body.model));
+    const comboFailed = resolveCombo(body.model);
+    // When body.model was a combo, the final attempt (last target) is the real
+    // model requested; otherwise fall through to the alias rewrite as before.
+    const mappedModel = comboFailed ? comboFailed[comboFailed.length - 1]! : resolveModelAlias(normalizeModelId(body.model));
     const provider = pool.getProviderForModel(mappedModel) || "unknown";
     await logProxyError({
       provider,
       model: mappedModel,
       status: "error",
       errorMessage,
-      requestBody: prepareLogBody({ ...body, model: mappedModel, _poolprox: { originalModel: body.model } }),
+      requestBody: prepareLogBody({
+        ...body,
+        model: mappedModel,
+        _poolprox: { originalModel: body.model, ...(comboFailed ? { combo: body.model } : {}) },
+      }),
       responseBody: prepareLogBody({ error: errorMessage }),
       durationMs: 0,
     }, "messages error");

@@ -1,5 +1,4 @@
-import { Users, Activity, CheckCircle, Zap } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
@@ -27,68 +26,94 @@ const defaultData: StatsData = {
 };
 
 export default function StatsCards({ data = defaultData }: StatsCardsProps) {
-  const stats = [
-    {
-      label: "Accounts",
-      value: `${data.accounts.active}/${data.accounts.total}`,
-      subtitle: `active`,
-      icon: Users,
-      color: "text-[var(--chart-2)]",
-      bgColor: "bg-[var(--chart-2)]/10",
-    },
+  const errorRate = data.successRate > 0 ? Number((100 - data.successRate).toFixed(1)) : 0;
+  const idle = data.accounts.total - data.accounts.active;
+
+  // Error rate is the number an operator scans for first, so it gets the
+  // largest type and the only color. The rest are supporting readouts.
+  const errorTone =
+    errorRate === 0
+      ? "var(--muted-foreground)"
+      : errorRate < 2
+        ? "var(--warning)"
+        : "var(--error)";
+
+  const secondary = [
     {
       label: "Requests",
       value: data.requests.toLocaleString(),
-      subtitle: "All time",
-      icon: Activity,
-      color: "text-[var(--chart-3)]",
-      bgColor: "bg-[var(--chart-3)]/10",
+      note: "all time",
     },
     {
-      label: "Success Rate",
-      value: `${data.successRate}%`,
-      subtitle: "All time",
-      icon: CheckCircle,
-      color: "text-[var(--success)]",
-      bgColor: "bg-[var(--success)]/10",
-    },
-    {
-      label: "Total Tokens",
+      label: "Tokens",
       value: formatTokens(data.totalTokens),
-      subtitle: "All time",
-      icon: Zap,
-      color: "text-[var(--warning)]",
-      bgColor: "bg-[var(--warning)]/10",
+      note: "all time",
+    },
+    {
+      label: "Keys live",
+      value: `${data.accounts.active}`,
+      note: `${idle > 0 ? `${idle} idle · ` : ""}${data.accounts.total} total`,
+      tone: data.accounts.active > 0 ? "var(--success)" : "var(--muted-foreground)",
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      {stats.map((stat) => (
-        <Card
-          key={stat.label}
-          className="group relative overflow-hidden transition-all hover:border-[var(--primary)]/40"
-        >
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="min-w-0">
-                <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">
-                  {stat.label}
-                </p>
-                <p className="text-2xl font-bold mt-1 text-[var(--foreground)] tabular-nums">
-                  {stat.value}
-                </p>
-                <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                  {stat.subtitle}
-                </p>
-              </div>
-              <div className={`p-3 rounded-xl ${stat.bgColor} transition-transform group-hover:scale-105`}>
-                <stat.icon className={`w-5 h-5 ${stat.color}`} />
-              </div>
+    /* One strip, not four equal cards. The pool health readout is wide and
+       loud; the three supporting metrics share a divided rail beside it. */
+    <Card className="grid grid-cols-1 divide-y divide-[var(--border)] overflow-hidden lg:grid-cols-[minmax(0,1.15fr)_minmax(0,2fr)] lg:divide-x lg:divide-y-0">
+      {/* Primary: error rate + success as the fine print under it */}
+      <div className="flex items-end justify-between gap-4 px-4 py-4">
+        <div>
+          <div className="eyebrow">Error rate</div>
+          <div
+            className="mt-1.5 font-mono text-[40px] font-semibold leading-none tabular-nums"
+            style={{ color: errorTone }}
+          >
+            {errorRate}
+            <span className="ml-0.5 text-[18px] font-medium opacity-60">%</span>
+          </div>
+          <div className="mt-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+            {data.successRate}% success · {data.requests.toLocaleString()} req
+          </div>
+        </div>
+
+        {/* Pool occupancy as a compact bar of live vs idle keys */}
+        <div className="hidden w-28 shrink-0 sm:block">
+          <div className="eyebrow text-right">Pool</div>
+          <div className="mt-2 flex h-6 gap-px overflow-hidden rounded-sm bg-[var(--secondary)]">
+            {data.accounts.total > 0 ? (
+              <>
+                <div
+                  className="h-full bg-[var(--success)]/70 transition-[width] duration-200 ease-out"
+                  style={{ width: `${(data.accounts.active / data.accounts.total) * 100}%` }}
+                />
+                <div className="h-full flex-1" />
+              </>
+            ) : null}
+          </div>
+          <div className="mt-1.5 text-right font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+            {data.accounts.active}/{data.accounts.total}
+          </div>
+        </div>
+      </div>
+
+      {/* Secondary rail: denser, flatter, numbers first */}
+      <div className="grid grid-cols-3 divide-x divide-[var(--border)]">
+        {secondary.map((stat) => (
+          <div key={stat.label} className="px-3 py-4 sm:px-4">
+            <div className="eyebrow">{stat.label}</div>
+            <div
+              className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
+              style={{ color: stat.tone || "var(--foreground)" }}
+            >
+              {stat.value}
             </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+            <div className="mt-1.5 truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+              {stat.note}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

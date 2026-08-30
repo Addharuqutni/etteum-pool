@@ -16,7 +16,7 @@ import aiohttp
 
 
 def _debug(msg: str) -> None:
-    if os.getenv("BATCHER_KIRO_AUTH_DEBUG", "false").lower() == "true":
+    if os.getenv("BATCHER_AUTH_DEBUG", "false").lower() == "true":
         print(f"[captcha] {msg}", flush=True)
 
 
@@ -87,7 +87,7 @@ class CaptchaSolver:
         if self.service == "capsolver" and self.api_key:
             _emit({
                 "type": "progress",
-                "provider": "kiro-pro",
+                "provider": "captcha",
                 "step": "captcha_auto",
                 "message": f"Attempting auto-solve ({captcha_type})...",
             })
@@ -225,7 +225,7 @@ class CaptchaSolver:
         """Wait for user to manually solve captcha in non-headless browser."""
         _emit({
             "type": "progress",
-            "provider": "kiro-pro",
+            "provider": "captcha",
             "step": "captcha_manual",
             "message": f"Captcha detected — please solve manually in the browser (timeout: {timeout}s)",
         })

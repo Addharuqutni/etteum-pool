@@ -24,6 +24,12 @@ import { applyCaveman, compactText } from "./caveman";
 import { applyCacheMarkers } from "./cache-markers";
 import { applyImageDedupe } from "./image-dedupe";
 import { applyTSC } from "./tsc";
+import { applyPonytail, scanPonytailMarkers } from "./ponytail";
+import {
+  PONYTAIL_LITE_RULESET,
+  PONYTAIL_FULL_RULESET,
+  PONYTAIL_ULTRA_RULESET,
+} from "./ponytail-ruleset";
 import type { ChatCompletionRequest } from "../providers/base";
 
 function bigString(n: number): string {
@@ -667,5 +673,274 @@ describe("compressRequest — orchestrator", () => {
     expect(s.saved).toBe(0);
     expect(s.savedPct).toBe(0);
     expect(Object.keys(s.byTechnique).length).toBe(0);
+  });
+});
+
+// ─── Ponytail ─────────────────────────────────────────────────────────────
+
+describe("Ponytail — lazy-dev ruleset injection", () => {
+  it("injects ruleset into Anthropic string system prompt (saved is NEGATIVE)", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "build a web server" }],
+      ...({ system: "You are a helpful assistant." } as any),
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: true,
+      mode: "lite",
+      providerOverrides: {},
+      stripMarkersFromOutput: false,
+    });
+    const sys = (request as any).system;
+    // System prompt must now contain the Ponytail header.
+    expect(typeof sys).toBe("string");
+    expect(sys).toContain("Ponytail");
+    expect(sys.length).toBeGreaterThan("You are a helpful assistant.".length);
+    // saved is NEGATIVE because we ADD tokens.
+    expect(saved).toBeLessThan(0);
+  });
+
+  it("injects into OpenAI-style system message", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [
+        { role: "system", content: "You are a coder." },
+        { role: "user", content: "write a function" },
+      ],
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: true,
+      mode: "full",
+      providerOverrides: {},
+      stripMarkersFromOutput: false,
+    });
+    const sysMsg = request.messages[0]!;
+    expect(sysMsg.role).toBe("system");
+    expect(typeof sysMsg.content).toBe("string");
+    expect((sysMsg.content as string).length).toBeGreaterThan("You are a coder.".length);
+    expect(saved).toBeLessThan(0);
+  });
+
+  it("injects into Anthropic array system prompt", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+      ...({
+        system: [{ type: "text", text: "Original system prompt." }],
+      } as any),
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: true,
+      mode: "ultra",
+      providerOverrides: {},
+      stripMarkersFromOutput: false,
+    });
+    const sys = (request as any).system;
+    expect(Array.isArray(sys)).toBe(true);
+    expect(sys.length).toBe(2); // injected + original
+    expect(sys[0].text).toContain("Ponytail");
+    expect(saved).toBeLessThan(0);
+  });
+
+  it("three modes produce different overhead (lite < full < ultra)", () => {
+    const baseReq: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "do thing" }],
+      ...({ system: "sys" } as any),
+    };
+    const lite = applyPonytail({ ...baseReq }, {
+      enabled: true, mode: "lite", providerOverrides: {}, stripMarkersFromOutput: false,
+    });
+    const full = applyPonytail({ ...baseReq }, {
+      enabled: true, mode: "full", providerOverrides: {}, stripMarkersFromOutput: false,
+    });
+    const ultra = applyPonytail({ ...baseReq }, {
+      enabled: true, mode: "ultra", providerOverrides: {}, stripMarkersFromOutput: false,
+    });
+    // lite < full < ultra in terms of absolute overhead
+    expect(Math.abs(lite.saved)).toBeLessThan(Math.abs(full.saved));
+    expect(Math.abs(full.saved)).toBeLessThan(Math.abs(ultra.saved));
+  });
+
+  it("disabled -> no change, referential identity preserved", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: false,
+      mode: "lite",
+      providerOverrides: {},
+      stripMarkersFromOutput: false,
+    });
+    expect(saved).toBe(0);
+    expect(request).toBe(req);
+  });
+
+  it("provider override skips injection", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+      ...({ system: "sys" } as any),
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: true,
+      mode: "full",
+      providerOverrides: { codex: false },
+      stripMarkersFromOutput: false,
+    }, "codex");
+    expect(saved).toBe(0);
+    expect(request).toBe(req);
+  });
+
+  it("works when there is no system prompt (injects into OpenAI system message)", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const { request, saved } = applyPonytail(req, {
+      enabled: true,
+      mode: "lite",
+      providerOverrides: {},
+      stripMarkersFromOutput: false,
+    });
+    expect(saved).toBeLessThan(0);
+    // Should have inserted a system message at position 0.
+    expect(request.messages[0]!.role).toBe("system");
+  });
+});
+
+describe("Ponytail — output marker scanner", () => {
+  it("finds markers in response content", () => {
+    const response = {
+      choices: [{
+        message: {
+          content: "Here's the code.\n// ponytail: O(n²) scan, replace with indexed lookup when n>1000\nfunction find() {}",
+        },
+      }],
+    };
+    const { markers, strippedResponse } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(1);
+    expect(markers[0]!.ceiling).toContain("O(n²) scan");
+    expect(markers[0]!.upgradePath).toContain("indexed lookup");
+    expect(strippedResponse).toBeNull();
+  });
+
+  it("finds multiple markers", () => {
+    const response = {
+      choices: [{
+        message: {
+          content: "// ponytail: global lock, partition per-worker\n// ponytail: no retry, add exponential backoff\ncode()",
+        },
+      }],
+    };
+    const { markers } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(2);
+    expect(markers[0]!.ceiling).toContain("global lock");
+    expect(markers[1]!.ceiling).toContain("no retry");
+  });
+
+  it("finds markers in tool_calls arguments", () => {
+    const response = {
+      choices: [{
+        message: {
+          content: "calling tool",
+          tool_calls: [{
+            function: {
+              arguments: '{"code": "// ponytail: O(n) linear scan, use binary search\\nfunc()"}',
+            },
+          }],
+        },
+      }],
+    };
+    const { markers } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(1);
+    expect(markers[0]!.ceiling).toContain("O(n) linear scan");
+    expect(markers[0]!.location).toContain("tool_calls");
+  });
+
+  it("strips markers from content when strip=true", () => {
+    const response = {
+      choices: [{
+        message: {
+          content: "code\n// ponytail: O(n²) scan, use hashmap\ncode()",
+        },
+      }],
+    };
+    const { markers, strippedResponse } = scanPonytailMarkers(response, true);
+    expect(markers.length).toBe(1);
+    expect(strippedResponse).not.toBeNull();
+    const content = (strippedResponse as any).choices[0].message.content;
+    expect(content).not.toContain("ponytail:");
+  });
+
+  it("returns empty array when no markers present", () => {
+    const response = {
+      choices: [{
+        message: { content: "just regular code without any markers" },
+      }],
+    };
+    const { markers, strippedResponse } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(0);
+    expect(strippedResponse).toBeNull();
+  });
+
+  it("handles Anthropic-style content blocks", () => {
+    const response = {
+      choices: [{
+        message: {
+          content: [
+            { type: "text", text: "// ponytail: naive heuristic, upgrade to ML model when dataset >10k\ncode" },
+          ],
+        },
+      }],
+    };
+    const { markers } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(1);
+    expect(markers[0]!.ceiling).toContain("naive heuristic");
+  });
+
+  it("handles missing choices gracefully", () => {
+    const response = { error: "something" };
+    const { markers, strippedResponse } = scanPonytailMarkers(response, false);
+    expect(markers.length).toBe(0);
+    expect(strippedResponse).toBeNull();
+  });
+
+  it("handles null/undefined response gracefully", () => {
+    const { markers } = scanPonytailMarkers(null as any, false);
+    expect(markers.length).toBe(0);
+  });
+});
+
+describe("Ponytail — pipeline integration", () => {
+  it("pipeline with ponytail enabled adds overhead (negative byTechnique.ponytail)", () => {
+    const cfg = {
+      ...DEFAULT_COMPRESSION_CONFIG,
+      ponytail: {
+        enabled: true,
+        mode: "lite" as const,
+        providerOverrides: {},
+        stripMarkersFromOutput: false,
+      },
+    };
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "build a REST API" }],
+      ...({ system: "You are a helpful assistant." } as any),
+    };
+    const { stats } = compressRequest(req, cfg);
+    expect(stats.byTechnique.ponytail).toBeDefined();
+    expect(stats.byTechnique.ponytail!).toBeLessThan(0);
+  });
+
+  it("pipeline with ponytail disabled -> no ponytail in byTechnique", () => {
+    const cfg = DEFAULT_COMPRESSION_CONFIG;
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const { stats } = compressRequest(req, cfg);
+    expect(stats.byTechnique.ponytail).toBeUndefined();
   });
 });

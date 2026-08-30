@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { completeCodexOAuth } from "@/lib/api";
+import { Card } from "@/components/ui/card";
 
 export default function CodexOAuthCallback() {
   const [message, setMessage] = useState("Completing Codex login...");
@@ -53,12 +54,18 @@ export default function CodexOAuthCallback() {
   }, [params]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--background)] p-6 text-center">
-      <div className="max-w-md space-y-3 rounded-lg border border-[var(--border)] bg-[var(--card)] p-6">
-        <h1 className="text-lg font-semibold text-[var(--foreground)]">Codex Login</h1>
-        <p className="text-sm text-[var(--muted-foreground)]">{message}</p>
-        {done && <p className="text-xs text-[var(--muted-foreground)]">You can close this window.</p>}
-      </div>
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <Card className="w-full max-w-[340px] overflow-hidden shadow-[var(--shadow-raised)]">
+        <div className="border-b border-[var(--border)] px-4 py-3">
+          <h1 className="eyebrow">Codex Login</h1>
+        </div>
+        <div className="space-y-2 px-4 py-4">
+          <p className="font-mono text-[12px] leading-relaxed text-[var(--foreground)]">{message}</p>
+          {done && (
+            <p className="font-mono text-[11px] text-[var(--muted-foreground)]">You can close this window.</p>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

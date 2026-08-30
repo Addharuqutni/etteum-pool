@@ -15,7 +15,7 @@ async function test() {
   const testModels = [
     "genflow-gpt-5.4",
     "genflow-claude-opus-4.6",
-    "kiro-gpt-4",
+    "cb-sonnet-4.6",
     "openai-gpt-4o"
   ];
 

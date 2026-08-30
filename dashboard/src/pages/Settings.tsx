@@ -2,11 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Save, RefreshCw, Zap, Flame, Globe, Wand2 } from "lucide-react";
+import { Select } from "@/components/ui/select";
+import PageHeader from "@/components/layout/PageHeader";
+import { Save, RefreshCw, Zap, Flame, Globe, Wand2, Bell, Send } from "lucide-react";
 import {
   fetchSettings,
   updateSettings,
   fetchProviderList,
+  fetchAlertSettings,
+  updateAlertSettings,
+  sendTestAlert,
   fetchAutoWarmupStatus,
   type AutoWarmupStatus,
 } from "@/lib/api";
@@ -14,11 +19,12 @@ import { useApi } from "@/hooks/useApi";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
 
 const PROVIDER_LABELS: Record<string, string> = {
-  kiro: "Kiro",
-  "kiro-pro": "Kiro Pro",
   codebuddy: "CodeBuddy",
   "codebuddy-china": "CodeBuddy CN",
   canva: "Canva",
+  codex: "Codex",
+  "grok-cli": "Grok CLI",
+  claude: "Claude",
 };
 
 function labelFor(provider: string): string {
@@ -31,7 +37,7 @@ function labelFor(provider: string): string {
 
 export default function Settings() {
   const [form, setForm] = useState<Record<string, string>>({
-    load_balancing_method: "round_robin",
+    load_balancing_method: "sequential",
     auto_warmup_interval_minutes: "15",
     proxy_pool_usage: "all",
     proxy_pool_rotation: "round_robin",
@@ -49,11 +55,16 @@ export default function Settings() {
     compression_tsc_strip_schema_whitespace: "true",
     compression_tsc_trim_descriptions: "true",
     compression_tsc_drop_schema_meta: "true",
+    // Ponytail — lazy-dev ruleset injection (default OFF, changes model behavior).
+    compression_ponytail_enabled: "false",
+    compression_ponytail_mode: "lite",
+    compression_ponytail_strip_markers: "false",
   });
   const [warmupStatus, setWarmupStatus] = useState<AutoWarmupStatus | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [testingAlert, setTestingAlert] = useState(false);
   const { message, setMessage } = useTimedMessage<string>(null, 3000);
 
   const providerListApi = useApi<{ data: string[] }>(fetchProviderList, []);
@@ -64,8 +75,15 @@ export default function Settings() {
   );
 
   async function load() {
-    const res = (await fetchSettings()) as { data: Record<string, string> };
-    setForm((current) => ({ ...current, ...(res.data || {}) }));
+    const [res, alertsRes] = await Promise.all([
+      fetchSettings(),
+      fetchAlertSettings().catch(() => ({ data: {} })),
+    ]);
+    setForm((current) => ({
+      ...current,
+      ...(res.data || {}),
+      ...((alertsRes as any)?.data || {}),
+    }));
     setDirty(false);
     fetchAutoWarmupStatus().then(setWarmupStatus).catch(() => {});
   }
@@ -83,7 +101,7 @@ export default function Settings() {
     return (
       form[`provider_${provider}_lb_method`] ||
       form.load_balancing_method ||
-      "round_robin"
+      "sequential"
     );
   }
 
@@ -94,7 +112,18 @@ export default function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await updateSettings(form);
+      // Alert keys live on the dedicated /api/alerts/settings endpoint (it
+      // validates numerics + webhook URL); everything else goes to /api/settings.
+      const alertBody: Record<string, string> = {};
+      const mainBody: Record<string, string> = {};
+      for (const [key, value] of Object.entries(form)) {
+        if (key.startsWith("alert_")) alertBody[key] = value;
+        else mainBody[key] = value;
+      }
+      await Promise.all([
+        updateSettings(mainBody),
+        Object.keys(alertBody).length > 0 ? updateAlertSettings(alertBody) : Promise.resolve(),
+      ]);
       setSavedAt(new Date());
       setDirty(false);
       setMessage("Settings saved.");
@@ -103,76 +132,100 @@ export default function Settings() {
     }
   }
 
-  const globalMethod = form.load_balancing_method || "round_robin";
+  async function handleTestAlert() {
+    setTestingAlert(true);
+    try {
+      const res = await sendTestAlert();
+      const results = res?.data?.results || {};
+      const parts: string[] = [];
+      if (results.webhook) parts.push(results.webhook.ok ? "✓ webhook" : `webhook: ${results.webhook.error || "failed"}`);
+      if (results.telegram) parts.push(results.telegram.ok ? "✓ telegram" : `telegram: ${results.telegram.error || "failed"}`);
+      setMessage(parts.length > 0 ? parts.join(" · ") : "No channels configured");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Test alert failed");
+    } finally {
+      setTestingAlert(false);
+    }
+  }
+
+  const globalMethod = form.load_balancing_method || "sequential";
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Proxy Settings</h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Configure load balancing and auto warmup
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {dirty && (
-            <span className="text-xs text-[var(--warning)] px-2 py-1 rounded bg-[var(--warning)]/10">
-              Unsaved
-            </span>
-          )}
-          <Button variant="outline" size="sm" onClick={load}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Reload
-          </Button>
-          <Button size="sm" onClick={save} disabled={saving || !dirty}>
-            <Save className="w-4 h-4 mr-2" /> {saving ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Proxy Settings"
+        meta={
+          <>
+            <span>load balancing · failover · warmup</span>
+            {dirty && (
+              <>
+                <span aria-hidden className="text-[var(--border)]">·</span>
+                <span className="text-[var(--warning)]">unsaved</span>
+              </>
+            )}
+            {savedAt && !dirty && (
+              <>
+                <span aria-hidden className="text-[var(--border)]">·</span>
+                <span>saved {savedAt.toLocaleTimeString()}</span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={load}>
+              <RefreshCw className="w-3.5 h-3.5" /> Reload
+            </Button>
+            <Button size="sm" onClick={save} disabled={saving || !dirty}>
+              <Save className="w-3.5 h-3.5" /> {saving ? "Saving…" : "Save"}
+            </Button>
+          </>
+        }
+      />
 
       {message && (
-        <div className="rounded-md bg-[var(--success)]/10 p-3 text-sm text-[var(--success)]">
+        <p className="border-l-2 border-[var(--success)] bg-[var(--success)]/10 px-3 py-2 font-mono text-[11px] text-[var(--success)]">
           {message}
-        </div>
+        </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
         {/* Load Balancing */}
         <Card className="border-[var(--border)]">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-[var(--primary)]" />
               Load Balancing
             </CardTitle>
             <CardDescription>
-              Control how requests are distributed across accounts
+              Control how requests are distributed and failed over across accounts
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/40 p-4 space-y-2">
-              <label className="text-sm font-medium text-[var(--foreground)]">
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <label className="eyebrow">
                 Global Method
               </label>
-              <select
-                value={form.load_balancing_method || "round_robin"}
+              <Select
+                value={form.load_balancing_method || "sequential"}
                 onChange={(e) => setValue("load_balancing_method", e.target.value)}
-                className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]"
               >
+                <option value="sequential">Sequential failover</option>
                 <option value="round_robin">Round Robin</option>
-                <option value="sequential">Sequential</option>
-              </select>
-              <p className="text-xs text-[var(--muted-foreground)]">
+              </Select>
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 {globalMethod === "sequential"
-                  ? "Uses accounts in order, moves to next only when current is exhausted."
-                  : "Distributes requests evenly across all active accounts."}
+                  ? "Tries accounts by ID order (oldest first); on failure, continues to the next account until one succeeds or all are exhausted."
+                  : "Distributes requests evenly across all active accounts. On failure, retries the next available account."}
               </p>
             </div>
 
             {providers.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-[var(--foreground)]">
+              <div className="space-y-1">
+                <div className="eyebrow">
                   Per-Provider Override
                 </div>
-                <div className="space-y-2">
+                <div>
                   {providers.map((provider) => {
                     const key = `provider_${provider}_lb_method`;
                     const effective = lbMethodFor(provider);
@@ -180,19 +233,19 @@ export default function Settings() {
                     return (
                       <div
                         key={provider}
-                        className="flex items-center justify-between gap-3 p-3 rounded-lg bg-[var(--secondary)] border border-transparent hover:border-[var(--border)] transition-colors"
+                        className="flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-1 py-2 first:border-t-0"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-[var(--foreground)] flex items-center gap-2">
+                          <p className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
                             {labelFor(provider)}
                             {overriden && (
-                              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--primary)]/20 text-[var(--primary)]">
+                              <span className="rounded bg-[var(--primary)]/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--primary)]">
                                 override
                               </span>
                             )}
                           </p>
-                          <p className="text-xs text-[var(--muted-foreground)]">
-                            {effective === "sequential" ? "Sequential" : "Round Robin"}
+                          <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                            {effective === "sequential" ? "Sequential failover" : "Round Robin"}
                             {!overriden && (
                               <span className="ml-1 text-[var(--muted-foreground)]/70">
                                 (inherits global)
@@ -201,20 +254,21 @@ export default function Settings() {
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <select
+                          <Select
                             value={form[key] || ""}
                             onChange={(e) => setValue(key, e.target.value)}
-                            className="h-8 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 text-xs text-[var(--foreground)]"
+                            className="w-auto font-mono text-[11px]"
+                            aria-label={`Load balancing for ${labelFor(provider)}`}
                           >
                             <option value="">Inherit</option>
+                            <option value="sequential">Sequential failover</option>
                             <option value="round_robin">Round Robin</option>
-                            <option value="sequential">Sequential</option>
-                          </select>
+                          </Select>
                           {overriden && (
                             <button
                               type="button"
                               onClick={() => setValue(key, "")}
-                              className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] px-2 py-1 rounded hover:bg-[var(--secondary)]"
+                              className="rounded px-2 py-1 font-mono text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                               title="Clear override"
                             >
                               Reset
@@ -233,7 +287,7 @@ export default function Settings() {
         {/* Auto WarmUp */}
         <Card className="border-[var(--border)]">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2">
               <Flame className="w-4 h-4 text-[var(--primary)]" />
               Auto WarmUp
             </CardTitle>
@@ -243,7 +297,7 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <label className="text-sm text-[var(--foreground)]">Interval (minutes)</label>
+              <label className="eyebrow">Interval (minutes)</label>
               <Input
                 type="number"
                 min={1}
@@ -251,38 +305,38 @@ export default function Settings() {
                 value={form.auto_warmup_interval_minutes || ""}
                 onChange={(e) => setValue("auto_warmup_interval_minutes", e.target.value)}
                 placeholder="15"
-                className="mt-1"
+                className="mt-1.5 font-mono tabular-nums"
               />
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+              <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 Global interval for all providers with Auto WarmUp enabled
               </p>
             </div>
 
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/40 p-3 space-y-2">
-              <p className="text-xs text-[var(--muted-foreground)]">Status</p>
-              <p className="text-sm font-medium text-[var(--foreground)]">
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="eyebrow">Status</p>
+              <p className="font-mono text-[12px] text-[var(--foreground)]">
                 {warmupStatus && warmupStatus.enabledProviders.length > 0
                   ? `${warmupStatus.enabledProviders.length} provider${warmupStatus.enabledProviders.length === 1 ? "" : "s"} enabled`
                   : "No provider enabled"}
               </p>
               {warmupStatus?.enabledProviders && warmupStatus.enabledProviders.length > 0 && (
-                <p className="text-xs text-[var(--muted-foreground)] truncate">
+                <p className="truncate font-mono text-[11px] text-[var(--muted-foreground)]">
                   {warmupStatus.enabledProviders.map(labelFor).join(", ")}
                 </p>
               )}
               {warmupStatus?.nextRunAt && (
-                <p className="text-xs text-[var(--muted-foreground)]">
+                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                   Next run: {new Date(warmupStatus.nextRunAt).toLocaleTimeString()}
                 </p>
               )}
               {savedAt && (
-                <p className="text-xs text-[var(--muted-foreground)]">
+                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                   Last saved: {savedAt.toLocaleTimeString()}
                 </p>
               )}
             </div>
 
-            <p className="text-xs text-[var(--muted-foreground)]">
+            <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
               Auto WarmUp checks accounts with status active, exhausted, or error (skips pending). Enable/disable per provider on the Accounts page.
             </p>
           </CardContent>
@@ -291,7 +345,7 @@ export default function Settings() {
         {/* Proxy Pool */}
         <Card className="border-[var(--border)]">
           <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-[var(--primary)]" />
               Proxy Pool
             </CardTitle>
@@ -300,20 +354,19 @@ export default function Settings() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/40 p-4 space-y-2">
-              <label className="text-sm font-medium text-[var(--foreground)]">
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <label className="eyebrow">
                 Usage Scope
               </label>
-              <select
+              <Select
                 value={form.proxy_pool_usage || "all"}
                 onChange={(e) => setValue("proxy_pool_usage", e.target.value)}
-                className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]"
               >
                 <option value="all">All — Model + Auth</option>
                 <option value="model">Model Only — API requests only</option>
                 <option value="auth">Auth Only — Login automation only</option>
-              </select>
-              <p className="text-xs text-[var(--muted-foreground)]">
+              </Select>
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 {form.proxy_pool_usage === "model"
                   ? "Proxies are only used for upstream model API calls. Auth/login runs without proxy."
                   : form.proxy_pool_usage === "auth"
@@ -322,19 +375,18 @@ export default function Settings() {
               </p>
             </div>
 
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/40 p-4 space-y-2">
-              <label className="text-sm font-medium text-[var(--foreground)]">
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <label className="eyebrow">
                 Rotation Strategy
               </label>
-              <select
+              <Select
                 value={form.proxy_pool_rotation || "round_robin"}
                 onChange={(e) => setValue("proxy_pool_rotation", e.target.value)}
-                className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]"
               >
                 <option value="round_robin">Round Robin</option>
                 <option value="sequential">Sequential</option>
-              </select>
-              <p className="text-xs text-[var(--muted-foreground)]">
+              </Select>
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 {form.proxy_pool_rotation === "sequential"
                   ? "Uses one proxy until it fails, then moves to the next in the list."
                   : "Distributes requests evenly across all active proxies in rotation."}
@@ -348,11 +400,11 @@ export default function Settings() {
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <CardTitle className="text-base flex items-center gap-2">
+                <CardTitle className="flex items-center gap-2">
                   <Wand2 className="w-4 h-4 text-[var(--primary)]" />
                   Compression
                 </CardTitle>
-                <CardDescription className="mt-1">
+                <CardDescription>
                   Reduce token usage by compressing tool outputs, deduplicating context, and shortening prompts. Pipeline runs in order: DCP → RTK → Caveman → Image Dedupe → Cache Markers.
                 </CardDescription>
               </div>
@@ -360,7 +412,7 @@ export default function Settings() {
                 href="https://github.com/priyo000/etteum-pool/blob/main/docs/compression.md"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-[var(--primary)] hover:underline shrink-0 mt-1"
+                className="mt-0.5 shrink-0 font-mono text-[11px] text-[var(--primary)] hover:underline"
                 title="Open the compression docs"
               >
                 docs ↗
@@ -398,7 +450,7 @@ export default function Settings() {
                           setValue("compression_rtk_max_tool_chars", preset.chars);
                           setValue("compression_rtk_keep_last_n_turns_full", preset.turns);
                         }}
-                        className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors text-left ${
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
                           selected
                             ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
                             : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -417,7 +469,7 @@ export default function Settings() {
                 <Disclosure label="Advanced settings">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="text-xs text-[var(--muted-foreground)]">Max chars per tool result</label>
+                      <label className="eyebrow">Max chars per tool result</label>
                       <Input
                         type="number"
                         min={500}
@@ -425,37 +477,37 @@ export default function Settings() {
                         step={500}
                         value={form.compression_rtk_max_tool_chars || "4000"}
                         onChange={(e) => setValue("compression_rtk_max_tool_chars", e.target.value)}
-                        className="mt-1"
+                        className="mt-1.5 font-mono tabular-nums"
                       />
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1 leading-relaxed">
+                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
                         ~4 chars = 1 token. Default: <code>4000</code> (≈1000 tokens).
                       </p>
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted-foreground)]">Keep last N turns full</label>
+                      <label className="eyebrow">Keep last N turns full</label>
                       <Input
                         type="number"
                         min={0}
                         max={20}
                         value={form.compression_rtk_keep_last_n_turns_full || "2"}
                         onChange={(e) => setValue("compression_rtk_keep_last_n_turns_full", e.target.value)}
-                        className="mt-1"
+                        className="mt-1.5 font-mono tabular-nums"
                       />
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1 leading-relaxed">
+                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
                         Recent turns left untouched. Default: <code>2</code>.
                       </p>
                     </div>
                     <div>
-                      <label className="text-xs text-[var(--muted-foreground)]">Smart truncate</label>
-                      <label className="mt-1 flex items-center gap-2 h-9 px-3 rounded-md border border-[var(--border)] bg-[var(--background)] cursor-pointer">
+                      <label className="eyebrow">Smart truncate</label>
+                      <label className="mt-1.5 flex h-9 cursor-pointer items-center gap-2 rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5">
                         <input
                           type="checkbox"
                           checked={form.compression_rtk_smart_truncate === "true"}
                           onChange={(e) => setValue("compression_rtk_smart_truncate", e.target.checked ? "true" : "false")}
                         />
-                        <span className="text-xs text-[var(--foreground)]">Pattern-aware</span>
+                        <span className="font-mono text-[11px] text-[var(--foreground)]">Pattern-aware</span>
                       </label>
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1 leading-relaxed">
+                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
                         git diff / tree aware. Default: <code>on</code>.
                       </p>
                     </div>
@@ -501,7 +553,7 @@ export default function Settings() {
                         type="button"
                         onClick={() => setValue("compression_caveman_level", lvl)}
                         title={hint}
-                        className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors text-left ${
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
                           selected
                             ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
                             : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -521,6 +573,76 @@ export default function Settings() {
                   {form.compression_caveman_level === "ultra" &&
                     "Ultra: full + drops articles (a/an/the), drops modal helpers (you can/may/might), forces imperative voice. Saves ~50–70% but may degrade model behaviour. Use only after benchmarking."}
                 </p>
+              </div>
+            </CompressionRow>
+
+            {/* Ponytail — Lazy Dev Ruleset Injection */}
+            <CompressionRow
+              title="Ponytail"
+              subtitle="Lazy Dev Ruleset"
+              description="Injects a 'lazy senior dev' ruleset (YAGNI ladder, shortest-diff, no over-engineering) into the system prompt. ⚠️ ADDS ~300–1,400 tokens (shown as negative savings) but the model writes less code and fewer tool calls. Scan response for ponytail: corner-cutting markers. Adapted from DietrichGebert/ponytail (MIT)."
+              enabled={form.compression_ponytail_enabled === "true"}
+              onToggle={(v) => setValue("compression_ponytail_enabled", v ? "true" : "false")}
+              alwaysShowChildren
+            >
+              <div className="mt-3 space-y-2">
+                <div className="text-[11px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                  Ruleset intensity
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { lvl: "lite", title: "Lite", subtitle: "YAGNI ladder", hint: "~300 tokens · safest · just the 7-rung ladder + 5 core rules" },
+                      { lvl: "full", title: "Full", subtitle: "All rules", hint: "~800 tokens · moderate · full ruleset + marker instructions" },
+                      { lvl: "ultra", title: "Ultra", subtitle: "Tag taxonomy", hint: "~1,400 tokens · aggressive · full + 5-tag review taxonomy + worked examples" },
+                    ] as const
+                  ).map(({ lvl, title, subtitle, hint }) => {
+                    const selected = form.compression_ponytail_mode === lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setValue("compression_ponytail_mode", lvl)}
+                        title={hint}
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
+                          selected
+                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                            : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                        }`}
+                      >
+                        <div>{title}</div>
+                        <div className="text-[10px] mt-0.5 opacity-70">{subtitle}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
+                  {form.compression_ponytail_mode === "lite" &&
+                    "Lite: the 7-rung YAGNI ladder (does this need to be built? reuse existing? stdlib? one line?) plus 5 core rules (no abstractions, deletion over addition, shortest diff, fewest files, question complex requests). ~300 tokens added."}
+                  {form.compression_ponytail_mode === "full" &&
+                    "Full: lite + bug-fix=root-cause rule, explicit ponytail: marker instructions (mark deliberate corner-cuts with ceiling + upgrade path), and the 'not lazy about' guardrails (security, input validation, error handling). ~800 tokens added."}
+                  {form.compression_ponytail_mode === "ultra" &&
+                    "Ultra: full + 5-tag review taxonomy (delete/stdlib/native/yagni/shrink) with worked examples for each. Most aggressive behavior change — the model will push back on complex requests and default to deletion. ~1,400 tokens added."}
+                </p>
+                <Disclosure label="Advanced settings">
+                  <div className="space-y-3">
+                    <label className="flex cursor-pointer items-center gap-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+                      <input
+                        type="checkbox"
+                        checked={form.compression_ponytail_strip_markers === "true"}
+                        onChange={(e) => setValue("compression_ponytail_strip_markers", e.target.checked ? "true" : "false")}
+                        className="accent-[var(--primary)]"
+                      />
+                      <span>Strip <code>ponytail:</code> markers from response before storing (markers still counted in stats)</span>
+                    </label>
+                    <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+                      When enabled, <code>ponytail: ceiling, upgrade</code> comments are removed from the
+                      response body stored in <code>request_logs</code>. The marker count and details are
+                      still recorded in <code>compression_stats.ponytail</code> for telemetry. Disable to
+                      keep markers visible in the stored response for audit purposes.
+                    </p>
+                  </div>
+                </Disclosure>
               </div>
             </CompressionRow>
 
@@ -552,6 +674,147 @@ export default function Settings() {
             />
           </CardContent>
         </Card>
+
+        {/* Alerts — webhook + telegram notifications */}
+        <Card className="border-[var(--border)] lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-[var(--primary)]" />
+              Alerts
+            </CardTitle>
+            <CardDescription>
+              Webhook + Telegram notifications for pool events
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <CompressionRow
+              title="Master toggle"
+              subtitle="all channels"
+              description="Off disables every alert below without losing their settings."
+              enabled={form.alert_enabled === "true"}
+              onToggle={(v) => setValue("alert_enabled", v ? "true" : "false")}
+            />
+
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <label className="eyebrow">Webhook URL</label>
+              <Input
+                type="url"
+                placeholder="https://discord.com/api/webhooks/..."
+                value={form.alert_webhook_url || ""}
+                onChange={(e) => setValue("alert_webhook_url", e.target.value)}
+              />
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Discord or Slack compatible — receives <code>{"{content}"}</code> JSON POST
+              </p>
+            </div>
+
+            <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <label className="eyebrow">Telegram</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input
+                  type="text"
+                  placeholder="Bot token"
+                  value={form.alert_telegram_token || ""}
+                  onChange={(e) => setValue("alert_telegram_token", e.target.value)}
+                />
+                <Input
+                  type="text"
+                  placeholder="Chat ID"
+                  value={form.alert_telegram_chat || ""}
+                  onChange={(e) => setValue("alert_telegram_chat", e.target.value)}
+                />
+              </div>
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Optional — sends via Telegram sendMessage API
+              </p>
+            </div>
+
+            <CompressionRow
+              title="Account error / exhausted"
+              subtitle="account"
+              description="Fires when an account hits an error or runs out of credits."
+              enabled={form.alert_event_account_error === "true"}
+              onToggle={(v) => setValue("alert_event_account_error", v ? "true" : "false")}
+            />
+
+            <CompressionRow
+              title="Low credits"
+              subtitle="credit threshold"
+              description="Warns when remaining credits drop below the threshold."
+              enabled={form.alert_event_low_credits === "true"}
+              onToggle={(v) => setValue("alert_event_low_credits", v ? "true" : "false")}
+            >
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="eyebrow">Threshold %</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={form.alert_credit_threshold || ""}
+                    onChange={(e) => setValue("alert_credit_threshold", e.target.value)}
+                    className="mt-1.5 font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+            </CompressionRow>
+
+            <CompressionRow
+              title="Error-rate spike"
+              subtitle="threshold + window"
+              description="Fires when the error rate exceeds the threshold over the window."
+              enabled={form.alert_event_error_rate === "true"}
+              onToggle={(v) => setValue("alert_event_error_rate", v ? "true" : "false")}
+            >
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="eyebrow">Percent</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={form.alert_error_rate_percent || ""}
+                    onChange={(e) => setValue("alert_error_rate_percent", e.target.value)}
+                    className="mt-1.5 font-mono tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="eyebrow">Window (min)</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={form.alert_error_rate_window_min || ""}
+                    onChange={(e) => setValue("alert_error_rate_window_min", e.target.value)}
+                    className="mt-1.5 font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+            </CompressionRow>
+
+            <CompressionRow
+              title="Proxy pool empty"
+              subtitle="pool"
+              description="Fires when no proxies remain in the pool."
+              enabled={form.alert_event_proxy_pool_empty === "true"}
+              onToggle={(v) => setValue("alert_event_proxy_pool_empty", v ? "true" : "false")}
+            />
+
+            <div className="flex items-end justify-between gap-4">
+              <div className="max-w-[180px]">
+                <label className="eyebrow">Cooldown (min)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.alert_cooldown_min || ""}
+                  onChange={(e) => setValue("alert_cooldown_min", e.target.value)}
+                  className="mt-1.5 font-mono tabular-nums"
+                />
+              </div>
+              <Button variant="outline" size="sm" onClick={handleTestAlert} disabled={testingAlert}>
+                {testingAlert ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                {testingAlert ? "Sending…" : "Send test alert"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -564,12 +827,12 @@ export default function Settings() {
  */
 function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <details className="group rounded-md border border-[var(--border)] bg-[var(--background)]/40">
-      <summary className="cursor-pointer list-none select-none px-3 py-2 flex items-center justify-between text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+    <details className="group rounded-md border border-[var(--hairline)]">
+      <summary className="flex cursor-pointer list-none select-none items-center justify-between px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
         <span>{label}</span>
         <span className="transition-transform group-open:rotate-180" aria-hidden>▾</span>
       </summary>
-      <div className="px-3 pb-3 pt-1 border-t border-[var(--border)]">{children}</div>
+      <div className="border-t border-[var(--hairline)] px-3 pb-3 pt-2">{children}</div>
     </details>
   );
 }
@@ -593,14 +856,14 @@ function CompressionRow({
   alwaysShowChildren?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/40 p-4">
+    <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold text-[var(--foreground)]">{title}</span>
-            <span className="text-xs text-[var(--muted-foreground)]">({subtitle})</span>
+            <span className="font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--foreground)]">{title}</span>
+            <span className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">({subtitle})</span>
           </div>
-          <p className="mt-1 text-xs text-[var(--muted-foreground)]">{description}</p>
+          <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">{description}</p>
         </div>
         <label className="relative inline-flex items-center cursor-pointer shrink-0">
           <input
@@ -609,7 +872,7 @@ function CompressionRow({
             checked={enabled}
             onChange={(e) => onToggle(e.target.checked)}
           />
-          <div className="w-10 h-5 bg-[var(--border)] peer-checked:bg-[var(--primary)] rounded-full transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform peer-checked:after:translate-x-5"></div>
+          <div className="w-10 h-5 bg-[var(--border)] peer-checked:bg-[var(--primary)] rounded-full transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ring)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[var(--card)] after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-transform duration-200 peer-checked:after:translate-x-5"></div>
         </label>
       </div>
       {children && (alwaysShowChildren || enabled) && (

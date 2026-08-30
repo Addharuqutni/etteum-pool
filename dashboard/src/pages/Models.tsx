@@ -1,8 +1,9 @@
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Cpu, Copy, Check, Search } from "lucide-react";
-import { useEffect, useState } from "react";
-import { fetchModels } from "@/lib/api";
+import { Card } from "@/components/ui/card";
+import PageHeader from "@/components/layout/PageHeader";
+import { Copy, Check, Search, ArrowDownAZ, ArrowUpAZ } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { fetchAccounts, fetchModels } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
 
 interface ModelData {
@@ -15,15 +16,26 @@ interface ModelData {
   thinking?: boolean;
 }
 
+// Provider accents come from the chart palette so they stay in sync with the
+// theme (and with the same providers plotted on the usage chart).
 const providerColors: Record<string, string> = {
-  kiro: "bg-[var(--chart-2)]/15 text-[var(--chart-2)] border-[var(--chart-2)]/30",
-  "kiro-pro": "bg-[var(--primary)]/15 text-[var(--primary)] border-[var(--primary)]/30",
-  codebuddy: "bg-[var(--chart-3)]/15 text-[var(--chart-3)] border-[var(--chart-3)]/30",
-  "codebuddy-china": "bg-red-500/15 text-red-400 border-red-400/30",
-  canva: "bg-[var(--chart-6)]/15 text-[var(--chart-6)] border-[var(--chart-6)]/30",
-  codex: "bg-[var(--chart-1)]/15 text-[var(--chart-1)] border-[var(--chart-1)]/30",
-  qoder: "bg-[var(--chart-4)]/15 text-[var(--chart-4)] border-[var(--chart-4)]/30",
+  codebuddy: "bg-[var(--chart-3)]/12 text-[var(--chart-3)] border-[var(--chart-3)]/30",
+  "codebuddy-china": "bg-[var(--chart-5)]/12 text-[var(--chart-5)] border-[var(--chart-5)]/30",
+  canva: "bg-[var(--chart-6)]/12 text-[var(--chart-6)] border-[var(--chart-6)]/30",
+  codex: "bg-[var(--chart-1)]/12 text-[var(--chart-1)] border-[var(--chart-1)]/30",
+  "grok-cli": "bg-[var(--chart-2)]/12 text-[var(--chart-2)] border-[var(--chart-2)]/30",
+  claude: "bg-[var(--chart-4)]/12 text-[var(--chart-4)] border-[var(--chart-4)]/30",
+  byok: "bg-[var(--chart-5)]/12 text-[var(--chart-5)] border-[var(--chart-5)]/30",
 };
+
+function providerKey(owner: string): string {
+  return owner.toLowerCase().startsWith("byok") ? "byok" : owner;
+}
+
+function providerLabel(provider: string): string {
+  if (provider === "byok") return "BYOK";
+  return provider.split("-").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
+}
 
 function formatNumber(n: number | undefined): string {
   if (!n) return "-";
@@ -35,182 +47,228 @@ function formatNumber(n: number | undefined): string {
 export default function Models() {
   const [models, setModels] = useState<ModelData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>("all");
+  const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"owner" | "id">("owner");
+  const [accountsByProvider, setAccountsByProvider] = useState<Record<string, number> | null>(null);
+  const [accountsFailed, setAccountsFailed] = useState(false);
+  const [usableOnly, setUsableOnly] = useState(() => localStorage.getItem("models-usable-only") === "true");
   const { message: copiedModel, setMessage: setCopiedModel } = useTimedMessage<string>(null, 1500);
 
   useEffect(() => {
-    fetchModels()
-      .then((res: { data: ModelData[] }) => {
-        setModels(res.data || []);
-      })
-      .catch(() => setModels([]))
-      .finally(() => setLoading(false));
+    Promise.all([
+      fetchModels().then((res: { data: ModelData[] }) => setModels(res.data || [])).catch(() => setModels([])),
+      fetchAccounts().then((res: { data: Array<{ provider: string; status: string; enabled?: boolean }> }) => {
+        const counts: Record<string, number> = {};
+        (res.data || []).forEach((account) => {
+          if (account.status === "active" && account.enabled !== false) {
+            const key = providerKey(account.provider);
+            counts[key] = (counts[key] || 0) + 1;
+          }
+        });
+        setAccountsByProvider(counts);
+      }).catch(() => setAccountsFailed(true)),
+    ]).finally(() => setLoading(false));
   }, []);
 
-  const providers = ["all", ...Array.from(new Set(models.map((m) => m.owned_by)))];
+  useEffect(() => {
+    localStorage.setItem("models-usable-only", String(usableOnly));
+  }, [usableOnly]);
 
-  const filtered = models
-    .filter((m) => filter === "all" || m.owned_by === filter)
-    .filter((m) =>
-      search === "" ||
-      m.id.toLowerCase().includes(search.toLowerCase()) ||
-      m.owned_by.toLowerCase().includes(search.toLowerCase())
-    );
+  const usableProvider = (provider: string): boolean => accountsByProvider === null || (accountsByProvider[provider] ?? 0) > 0;
+
+  const providers = useMemo(() => {
+    const counts = new Map<string, number>();
+    models.forEach((model) => {
+      const key = providerKey(model.owned_by);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [models]);
+
+  const usableModels = useMemo(() => models.filter((model) => usableProvider(providerKey(model.owned_by))).length, [models, accountsByProvider]);
+
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return models
+      .filter((model) => filter === "all" || providerKey(model.owned_by) === filter)
+      .filter((model) => !usableOnly || usableProvider(providerKey(model.owned_by)))
+      .filter((model) => !query || model.id.toLowerCase().includes(query) || model.owned_by.toLowerCase().includes(query))
+      .sort((a, b) => {
+        const primary = sortBy === "owner" ? a.owned_by.localeCompare(b.owned_by) : a.id.localeCompare(b.id);
+        return primary || a.id.localeCompare(b.id);
+      });
+  }, [filter, models, search, sortBy, usableOnly, accountsByProvider]);
 
   async function copyModelId(modelId: string) {
-    await navigator.clipboard.writeText(modelId);
-    setCopiedModel(modelId);
+    try {
+      await navigator.clipboard.writeText(modelId);
+      setCopiedModel(modelId);
+    } catch {
+      /* clipboard unavailable */
+    }
   }
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--primary)]" />
-      </div>
+      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+        Loading models…
+      </p>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">Models</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          {models.length} models available across {new Set(models.map((m) => m.owned_by)).size} providers
-        </p>
-      </div>
-
-      {/* Search */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              placeholder="Search models, owners..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2">
-        {providers.map((p) => (
-          <button
-            key={p}
-            onClick={() => setFilter(p)}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              filter === p
-                ? "bg-[var(--info)]/20 text-[var(--info)] border border-[var(--info)]/30"
-                : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-            }`}
-          >
-            {p === "all" ? "All" : p.charAt(0).toUpperCase() + p.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[var(--border)] bg-[var(--secondary)]/50">
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Model
-                  </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Owner
-                  </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Context
-                  </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Output
-                  </th>
-                  <th className="text-left py-3 px-4 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Features
-                  </th>
-                  <th className="w-12"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((model) => (
-                  <tr
-                    key={model.id}
-                    className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--secondary)]/30 transition-colors"
-                  >
-                    {/* Model ID */}
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-[var(--foreground)]">
-                          {model.id}
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* Owner */}
-                    <td className="py-3 px-4">
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium border ${providerColors[model.owned_by] || "bg-[var(--muted)]/20 text-[var(--muted-foreground)]"}`}>
-                        {model.owned_by}
-                      </span>
-                    </td>
-
-                    {/* Context */}
-                    <td className="py-3 px-4 text-sm text-[var(--foreground)]">
-                      {formatNumber(model.context_window)}
-                    </td>
-
-                    {/* Output */}
-                    <td className="py-3 px-4 text-sm text-[var(--foreground)]">
-                      {formatNumber(model.max_output)}
-                    </td>
-
-                    {/* Features */}
-                    <td className="py-3 px-4">
-                      {model.thinking && (
-                        <Badge variant="default" className="text-xs">
-                          Thinking
-                        </Badge>
-                      )}
-                    </td>
-
-                    {/* Copy Button */}
-                    <td className="py-3 px-4">
-                      <button
-                        type="button"
-                        onClick={() => copyModelId(model.id)}
-                        title={`Copy model ID: ${model.id}`}
-                        className="p-1.5 rounded-md hover:bg-[var(--secondary)] transition-colors group"
-                      >
-                        {copiedModel === model.id ? (
-                          <Check className="w-4 h-4 text-[var(--success)]" />
-                        ) : (
-                          <Copy className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]" />
-                        )}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {filtered.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Cpu className="w-12 h-12 text-[var(--muted-foreground)] mb-4" />
-              <p className="text-[var(--muted-foreground)]">No models found</p>
-              <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                Try adjusting your search or filter
-              </p>
+    <div className="space-y-4">
+      <PageHeader
+        title="Models"
+        meta={
+          <>
+            <span>{models.length} models</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>{providers.length} providers</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span className={usableModels < models.length ? "text-[var(--warning)]" : undefined}>
+              {usableModels} usable
+            </span>
+          </>
+        }
+        actions={
+          <>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                type="text"
+                placeholder="model or owner…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search models or owners"
+                className="h-9 w-full rounded-md border border-[var(--input)] bg-[var(--background)] pl-8 pr-2.5 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35 sm:w-56 md:h-8"
+              />
             </div>
-          )}
-        </CardContent>
+            <button
+              type="button"
+              onClick={() => setUsableOnly((value) => !value)}
+              aria-pressed={usableOnly}
+              title="Only show models from providers with active, enabled accounts"
+              className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] md:h-8 ${usableOnly ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${usableOnly ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]"}`} /> Has accounts
+            </button>
+          </>
+        }
+      />
+
+      {/* Provider filter rail — a row of terminal-style chips, no card wrapper.
+          Filters are chrome; they don't deserve their own panel. */}
+      <div className="flex flex-wrap items-center gap-1" aria-label="Filter by provider">
+        <button
+          type="button"
+          onClick={() => setFilter("all")}
+          aria-pressed={filter === "all"}
+          className={`rounded-[4px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${filter === "all" ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+        >
+          All <span className="tabular-nums opacity-70">{models.length}</span>
+        </button>
+        {providers.map(([provider, count]) => {
+          const active = filter === provider;
+          const accent = providerColors[provider];
+          const accountCount = accountsByProvider?.[provider] ?? 0;
+          const hasAccounts = accountsByProvider === null || accountCount > 0;
+          return (
+            <button
+              key={provider}
+              type="button"
+              onClick={() => setFilter(provider)}
+              aria-pressed={active}
+              title={accountsByProvider && !hasAccounts ? "No active accounts for this provider" : `${accountCount} active account${accountCount === 1 ? "" : "s"}`}
+              className={`rounded-[4px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${active && accent ? accent : active ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : !hasAccounts ? "border-dashed border-[var(--warning)]/35 text-[var(--muted-foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            >
+              {providerLabel(provider)} <span className="tabular-nums opacity-70">{count}</span>
+              {accountsByProvider !== null && (
+                <span className={hasAccounts ? "text-[var(--success)]" : "text-[var(--warning)]"}>
+                  {" "}· {hasAccounts ? `${accountCount} keys` : "no keys"}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {accountsFailed && (
+        <p className="font-mono text-[11px] text-[var(--warning)]">
+          Account availability unavailable — showing all models.
+        </p>
+      )}
+
+      {/* The inventory table is this page's primary surface. */}
+      <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+          <span className="eyebrow">{filtered.length} shown</span>
+          <button
+            type="button"
+            onClick={() => setSortBy((value) => value === "owner" ? "id" : "owner")}
+            aria-label={`Sort by ${sortBy === "owner" ? "model ID" : "owner"}`}
+            title={`Sort by ${sortBy === "owner" ? "model ID" : "owner"}`}
+            className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+          >
+            {sortBy === "owner" ? <ArrowDownAZ className="w-3.5 h-3.5" /> : <ArrowUpAZ className="w-3.5 h-3.5" />} {sortBy === "owner" ? "Owner" : "Model ID"}
+          </button>
+        </div>
+        <div className="max-h-[min(66vh,44rem)] overflow-auto">
+          <table className="w-full min-w-[680px] border-collapse font-mono text-[12px]">
+            <thead className="sticky-head">
+              <tr>
+                {(["Model", "Owner", "Context", "Output", "Thinking", ""] as const).map((heading, index) => (
+                  <th
+                    key={heading || index}
+                    className={`eyebrow px-4 py-2 ${index === 2 || index === 3 ? "text-right" : "text-left"}`}
+                  >
+                    {heading}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((model) => (
+                <tr
+                  key={model.id}
+                  className="border-t border-[var(--hairline)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)]/50"
+                >
+                  <td className="px-4 py-2"><span className="break-all text-[var(--foreground)]">{model.id}</span></td>
+                  <td className="px-4 py-2">
+                    <span
+                      title={usableProvider(providerKey(model.owned_by)) ? undefined : "No active accounts for this provider"}
+                      className={`inline-flex max-w-[180px] items-center truncate rounded-[4px] border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em] ${usableProvider(providerKey(model.owned_by)) ? (providerColors[providerKey(model.owned_by)] || "border-[var(--border)] text-[var(--muted-foreground)]") : "border-dashed border-[var(--border)] text-[var(--muted-foreground)] opacity-70"}`}
+                    >
+                      {model.owned_by}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-[var(--foreground)]">{formatNumber(model.context_window)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-[var(--foreground)]">{formatNumber(model.max_output)}</td>
+                  <td className="px-4 py-2">{model.thinking ? <Badge variant="info">Yes</Badge> : <span className="text-[var(--muted-foreground)]">—</span>}</td>
+                  <td className="px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={() => copyModelId(model.id)}
+                      title={`Copy model ID: ${model.id}`}
+                      aria-label={`Copy model ID: ${model.id}`}
+                      className="rounded-md p-1 transition-colors duration-150 ease-out hover:bg-[var(--secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+                    >
+                      {copiedModel === model.id ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="border-t border-[var(--hairline)] px-4 py-3 text-[var(--muted-foreground)]">
+                    No models match this filter — clear the search or pick another provider.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </Card>
     </div>
   );

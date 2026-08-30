@@ -5,12 +5,17 @@
  *   compressRequest(req, cfg, providerName?) -> { request, stats }
  *
  * The pipeline is deliberately ordered:
- *   1. DCP          — lossless (cheapest savings, must run first so RTK
+ *   0. TSC          — lossless tool-schema compaction (cheapest, provider-agnostic)
+ *   1. DCP          — lossless (cheapest savings, must run early so RTK
  *                     doesn't waste effort truncating soon-to-be-stubbed blocks)
  *   2. RTK          — lossy tool-result truncation
  *   3. Caveman      — lossy system-prompt compaction (off by default)
- *   4. Image dedupe — lossless image dedup
- *   5. Cache markers — structural; must run LAST because it tags the final
+ *   4. Ponytail     — ADDITIVE: injects a "lazy senior dev" ruleset into the
+ *                     system prompt. Increases input tokens (negative savings)
+ *                     but steers the model toward shorter, more efficient
+ *                     output. Off by default because it changes model behaviour.
+ *   5. Image dedupe — lossless image dedup
+ *   6. Cache markers — structural; must run LAST because it tags the final
  *                      prefix shape that upstream providers will hash for caching
  */
 
@@ -22,6 +27,7 @@ import { applyCaveman } from "./caveman";
 import { applyCacheMarkers } from "./cache-markers";
 import { applyImageDedupe } from "./image-dedupe";
 import { applyTSC } from "./tsc";
+import { applyPonytail } from "./ponytail";
 import { estimateRequestTokens } from "./token-estimate";
 
 export type { CompressionConfig, CompressionStats, CompressionTechnique } from "./types";
@@ -33,6 +39,7 @@ export {
   invalidateCompressionCache,
   isCompressionSettingKey,
 } from "./settings";
+export { scanPonytailMarkers } from "./ponytail";
 
 const CHARS_PER_TOKEN = 4;
 
@@ -92,7 +99,16 @@ export function compressRequest(
     current = r.request;
   }
 
-  // 4. Image dedupe
+  // 4. Ponytail — ADDITIVE: injects lazy-dev ruleset. `saved` is NEGATIVE
+  //    (tokens added). We record it regardless of sign so the dashboard can
+  //    show the overhead. Off by default because it changes model behaviour.
+  if (cfg.ponytail?.enabled) {
+    const r = applyPonytail(current, cfg.ponytail, providerName);
+    if (r.saved !== 0) byTechnique.ponytail = charsToTokens(r.saved);
+    current = r.request;
+  }
+
+  // 5. Image dedupe
   if (cfg.imageDedupe.enabled) {
     const r = applyImageDedupe(current, cfg.imageDedupe);
     if (r.saved > 0) byTechnique.imageDedupe = charsToTokens(r.saved);

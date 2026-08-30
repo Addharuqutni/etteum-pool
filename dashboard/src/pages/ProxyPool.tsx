@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Globe, Plus, Trash2, Upload, RefreshCw, Power, PowerOff, Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import PageHeader from "@/components/layout/PageHeader";
+import { Trash2, Upload, RefreshCw, Power, PowerOff, Download } from "lucide-react";
 import { fetchApi, fetchProxyCountries, scrapeProxies, type ProxyCountry } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
 
@@ -185,31 +188,17 @@ export default function ProxyPool() {
     }
   };
 
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      active: "bg-[var(--success)]/10 text-[var(--success)]",
-      disabled: "bg-[var(--warning)]/10 text-[var(--warning)]",
-      error: "bg-[var(--error)]/10 text-[var(--error)]",
-    };
-    return (
-      <span className={`text-xs px-2 py-0.5 rounded ${colors[status] || "bg-[var(--muted)]/10 text-[var(--muted-foreground)]"}`}>
-        {status}
-      </span>
-    );
-  };
+  const statusTone = (status: string) =>
+    status === "active"
+      ? "var(--success)"
+      : status === "disabled"
+        ? "var(--warning)"
+        : status === "error"
+          ? "var(--error)"
+          : "var(--muted-foreground)";
 
-  const latencyBadge = (ms: number | null) => {
-    if (ms == null) return null;
-    const color =
-      ms < 1000 ? "text-[var(--success)]" :
-      ms < 3000 ? "text-[var(--warning)]" :
-      "text-[var(--error)]";
-    return (
-      <span className={`text-xs font-mono shrink-0 ${color}`}>
-        {ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`}
-      </span>
-    );
-  };
+  const latencyTone = (ms: number) =>
+    ms < 1000 ? "var(--success)" : ms < 3000 ? "var(--warning)" : "var(--error)";
 
   const maskUrl = (url: string) => {
     try {
@@ -222,213 +211,223 @@ export default function ProxyPool() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Proxy Pool</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Manage HTTP/SOCKS5 proxies for upstream requests and auth
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {pool.activeCount}/{pool.count} active
-          </span>
-          <Button variant="outline" size="sm" onClick={handleCheckAll} disabled={checking}>
-            <RefreshCw className={`w-3 h-3 mr-1 ${checking ? "animate-spin" : ""}`} />
-            Check All
-          </Button>
-          {pool.count > 0 && (
-            <Button variant="outline" size="sm" onClick={handleClearAll}>
-              <Trash2 className="w-3 h-3 mr-1" />
-              Clear All
+    <div className="space-y-4">
+      <PageHeader
+        title="Proxy Pool"
+        meta={
+          <>
+            <span className={pool.activeCount > 0 ? "text-[var(--success)]" : undefined}>
+              {pool.activeCount} active
+            </span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>{pool.count} total</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>HTTP / SOCKS5</span>
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={handleCheckAll} disabled={checking}>
+              <RefreshCw className={`w-3.5 h-3.5 ${checking ? "animate-spin" : ""}`} />
+              {checking ? "Checking…" : "Check all"}
             </Button>
-          )}
-        </div>
-      </div>
+            {pool.count > 0 && (
+              <Button variant="ghost" size="sm" onClick={handleClearAll} className="hover:text-[var(--destructive)]">
+                <Trash2 className="w-3.5 h-3.5" /> Clear
+              </Button>
+            )}
+          </>
+        }
+      />
 
       {message && (
-        <div className="px-4 py-2 rounded-md bg-[var(--secondary)] text-sm text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
           {message}
-        </div>
+        </p>
       )}
 
-      {/* Add Proxies */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Add Proxies
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <textarea
-            className="w-full h-[120px] px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-            placeholder={"Paste proxy list (one per line):\n\nhttp://user:pass@host:port\nsocks5://host:port\nhttp://host:port"}
-            value={bulkText}
-            onChange={(e) => setBulkText(e.target.value)}
-          />
-          <Button onClick={handleBulkAdd} className="w-full">
-            <Upload className="w-4 h-4 mr-2" />
-            Add to Pool
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Scrape Proxies */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Download className="w-4 h-4" />
-            Scrape Proxies
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Pull fresh proxies from free public sources and add them straight to the pool.
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="space-y-1">
-              <label className="text-xs text-[var(--muted-foreground)]">Source</label>
-              <select
-                className="w-full px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                value={scrapeSource}
-                onChange={(e) => setScrapeSource(e.target.value as typeof scrapeSource)}
-              >
-                <option value="all">All sources</option>
-                <option value="proxyscrape">ProxyScrape</option>
-                <option value="geonode">Geonode</option>
-                <option value="proxifly">Proxifly</option>
-              </select>
+      {/* Intake on a narrow rail, the pool itself gets the room. Asymmetric on
+          purpose — the list is what an operator reads, the forms are tools. */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:items-start">
+        <div className="space-y-4">
+          <Card>
+            <div className="border-b border-[var(--border)] px-4 py-3">
+              <h2 className="eyebrow">Paste proxies</h2>
             </div>
-            <div className="space-y-1">
-              <label className="text-xs text-[var(--muted-foreground)]">Region</label>
-              <select
-                className="w-full px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                value={scrapeCountry}
-                onChange={(e) => setScrapeCountry(e.target.value)}
-              >
-                {countries.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-[var(--muted-foreground)]">Protocol</label>
-              <select
-                className="w-full px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                value={scrapeProtocol}
-                onChange={(e) => setScrapeProtocol(e.target.value as typeof scrapeProtocol)}
-              >
-                <option value="all">HTTP + SOCKS5</option>
-                <option value="http">HTTP</option>
-                <option value="socks5">SOCKS5</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs text-[var(--muted-foreground)]">Max count</label>
-              <input
-                type="number"
-                min={1}
-                max={500}
-                className="w-full px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                value={scrapeLimit}
-                onChange={(e) => setScrapeLimit(Number(e.target.value))}
+            <div className="space-y-2 px-3 py-3">
+              <textarea
+                className="h-[104px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                placeholder={"one per line\nhttp://user:pass@host:port\nsocks5://host:port"}
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                aria-label="Proxy list"
               />
+              <Button onClick={handleBulkAdd} size="sm" className="w-full">
+                <Upload className="w-3.5 h-3.5" /> Add to pool
+              </Button>
             </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-sm text-[var(--muted-foreground)] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={scrapeVerify}
-                onChange={(e) => setScrapeVerify(e.target.checked)}
-              />
-              Health-check before adding (slower, but only keeps working proxies)
-            </label>
-            <Button onClick={handleScrape} disabled={scraping}>
-              <Download className={`w-4 h-4 mr-2 ${scraping ? "animate-pulse" : ""}`} />
-              {scraping ? "Scraping..." : "Scrape & Add"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </Card>
 
-      {/* Proxy List */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Globe className="w-4 h-4" />
-            Proxy List
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+          <Card>
+            <div className="border-b border-[var(--border)] px-4 py-3">
+              <h2 className="eyebrow">Scrape public sources</h2>
+            </div>
+            <div className="space-y-2.5 px-3 py-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="scrape-source" className="eyebrow mb-1 block">Source</label>
+                  <Select
+                    id="scrape-source"
+                    className="font-mono text-[11px]"
+                    value={scrapeSource}
+                    onChange={(e) => setScrapeSource(e.target.value as typeof scrapeSource)}
+                  >
+                    <option value="all">all</option>
+                    <option value="proxyscrape">proxyscrape</option>
+                    <option value="geonode">geonode</option>
+                    <option value="proxifly">proxifly</option>
+                  </Select>
+                </div>
+                <div>
+                  <label htmlFor="scrape-region" className="eyebrow mb-1 block">Region</label>
+                  <Select
+                    id="scrape-region"
+                    className="font-mono text-[11px]"
+                    value={scrapeCountry}
+                    onChange={(e) => setScrapeCountry(e.target.value)}
+                  >
+                    {countries.map((c) => (
+                      <option key={c.code} value={c.code}>{c.name}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <label htmlFor="scrape-protocol" className="eyebrow mb-1 block">Protocol</label>
+                  <Select
+                    id="scrape-protocol"
+                    className="font-mono text-[11px]"
+                    value={scrapeProtocol}
+                    onChange={(e) => setScrapeProtocol(e.target.value as typeof scrapeProtocol)}
+                  >
+                    <option value="all">http + socks5</option>
+                    <option value="http">http</option>
+                    <option value="socks5">socks5</option>
+                  </Select>
+                </div>
+                <div>
+                  <label htmlFor="scrape-limit" className="eyebrow mb-1 block">Max</label>
+                  <Input
+                    id="scrape-limit"
+                    type="number"
+                    min={1}
+                    max={500}
+                    className="font-mono tabular-nums"
+                    value={scrapeLimit}
+                    onChange={(e) => setScrapeLimit(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+              <label className="flex cursor-pointer items-start gap-2 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-[var(--primary)]"
+                  checked={scrapeVerify}
+                  onChange={(e) => setScrapeVerify(e.target.checked)}
+                />
+                Health-check first — slower, keeps only working proxies
+              </label>
+              <Button onClick={handleScrape} disabled={scraping} size="sm" variant="outline" className="w-full">
+                <Download className="w-3.5 h-3.5" />
+                {scraping ? "Scraping…" : "Scrape & add"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+
+        {/* Primary surface: the pool */}
+        <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
           {loading ? (
-            <p className="text-sm text-[var(--muted-foreground)]">Loading...</p>
+            <p className="px-3 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
           ) : pool.proxies.length === 0 ? (
-            <p className="text-sm text-[var(--muted-foreground)]">
-              No proxies in pool. Add proxies above to enable IP rotation.
+            <p className="px-3 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+              Pool empty — paste or scrape proxies to enable IP rotation.
             </p>
           ) : (
-            <div className="space-y-2">
-              {pool.proxies.map((proxy) => (
-                <div
-                  key={proxy.id}
-                  className="flex items-center justify-between px-4 py-3 rounded-md bg-[var(--secondary)]"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <Globe className="w-4 h-4 text-[var(--muted-foreground)] shrink-0" />
-                    <span className="font-mono text-sm truncate">{maskUrl(proxy.url)}</span>
-                    <span className="text-xs text-[var(--muted-foreground)] shrink-0">{proxy.type}</span>
-                    {statusBadge(proxy.status)}
-                    {latencyBadge(proxy.latencyMs)}
-                    <span className="text-xs text-[var(--muted-foreground)] shrink-0">
-                      {proxy.successCount}ok / {proxy.failCount}fail
-                    </span>
-                    {proxy.lastUsedAt && (
-                      <span className="text-xs text-[var(--muted-foreground)] shrink-0">
-                        used {new Date(proxy.lastUsedAt).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleCheckSingle(proxy.id)}
-                      title="Health check"
+            <div className="max-h-[calc(100vh-14rem)] overflow-auto">
+              <table className="w-full border-collapse font-mono text-[12px]">
+                <thead className="sticky-head">
+                  <tr>
+                    <th className="eyebrow px-4 py-2 text-left">Endpoint</th>
+                    <th className="eyebrow px-4 py-2 text-left">Status</th>
+                    <th className="eyebrow px-4 py-2 text-right">Latency</th>
+                    <th className="eyebrow px-4 py-2 text-right hidden md:table-cell">Ok / Fail</th>
+                    <th className="eyebrow px-4 py-2 text-left hidden lg:table-cell">Last used</th>
+                    <th className="eyebrow px-4 py-2 text-right"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pool.proxies.map((proxy) => (
+                    <tr
+                      key={proxy.id}
+                      className={`border-t border-[var(--hairline)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)]/40 ${proxy.status === "active" ? "" : "opacity-70"}`}
                     >
-                      <RefreshCw className="w-3 h-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleToggle(proxy.id, proxy.status)}
-                      title={proxy.status === "active" ? "Disable" : "Enable"}
-                    >
-                      {proxy.status === "active" ? (
-                        <PowerOff className="w-3 h-3" />
-                      ) : (
-                        <Power className="w-3 h-3" />
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(proxy.id)}
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                      <td className="max-w-[260px] px-4 py-2">
+                        <span className="block truncate text-[var(--foreground)]" title={maskUrl(proxy.url)}>
+                          {maskUrl(proxy.url)}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted-foreground)]">{proxy.type}</span>
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className="inline-flex items-center gap-1.5" style={{ color: statusTone(proxy.status) }}>
+                          <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusTone(proxy.status) }} />
+                          {proxy.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={{ color: proxy.latencyMs == null ? "var(--muted-foreground)" : latencyTone(proxy.latencyMs) }}>
+                        {proxy.latencyMs == null ? "—" : proxy.latencyMs < 1000 ? `${proxy.latencyMs}ms` : `${(proxy.latencyMs / 1000).toFixed(1)}s`}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-[var(--muted-foreground)] hidden md:table-cell">
+                        <span className="text-[var(--success)]">{proxy.successCount}</span>
+                        {" / "}
+                        <span className={proxy.failCount > 0 ? "text-[var(--error)]" : ""}>{proxy.failCount}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-2 tabular-nums text-[var(--muted-foreground)] hidden lg:table-cell">
+                        {proxy.lastUsedAt ? new Date(proxy.lastUsedAt).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center justify-end">
+                          <Button variant="ghost" size="icon" onClick={() => handleCheckSingle(proxy.id)} title="Health check" aria-label="Health check">
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleToggle(proxy.id, proxy.status)}
+                            title={proxy.status === "active" ? "Disable" : "Enable"}
+                            aria-label={proxy.status === "active" ? "Disable proxy" : "Enable proxy"}
+                          >
+                            {proxy.status === "active" ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(proxy.id)}
+                            title="Delete"
+                            aria-label="Delete proxy"
+                            className="hover:text-[var(--destructive)]"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

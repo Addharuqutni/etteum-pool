@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -11,10 +12,15 @@ import {
   DialogTitle as DTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Plus, Upload, RefreshCw, Play, RotateCcw, Flame, ChevronDown, Loader2, Key, Pencil, Trash2, Zap, Lock, Shield, Eye, EyeOff } from "lucide-react";
+import PageHeader from "@/components/layout/PageHeader";
+import { Plus, Upload, RefreshCw, Play, RotateCcw, Flame, ChevronDown, Loader2, Key, Pencil, Trash2, Zap, Lock, Shield, Eye, EyeOff, Download } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { useWsEvent } from "@/hooks/useWebSocket";
 import {
+  cancelClaudeOAuth,
+  cancelCodebuddyOAuth,
+  cancelGrokCliOAuth,
+  completeClaudeOAuth,
   completeCodexOAuthCallbackUrl,
   createAccount,
   createByokProvider,
@@ -23,6 +29,7 @@ import {
   fetchApi,
   fetchAuthQueue,
   fetchAutoWarmupStatus,
+  fetchByokModels,
   fetchByokProviders,
   fetchSettings,
   fetchWarmupQueue,
@@ -31,8 +38,13 @@ import {
   loginAccounts,
   loginAllAccounts,
   pollCodexOAuthStatus,
+  pollCodebuddyOAuth,
+  pollGrokCliOAuth,
   revealByokKey,
+  startClaudeOAuth,
+  startCodebuddyDeviceCode,
   startCodexOAuthProxy,
+  startGrokCliDeviceCode,
   stopCodexOAuth,
   testByokProvider,
   updateByokProvider,
@@ -42,7 +54,7 @@ import {
   type ByokProvider,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+type Provider = "codebuddy" | "codebuddy-china" | "canva" | "codex" | "grok-cli" | "claude";
 
 type ByokFormKey = {
   id?: number;
@@ -62,16 +74,19 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["kiro", "kiro-pro", "codebuddy", "codebuddy-china", "canva", "codex", "qoder", "gitlab-duo", "youmind"];
+const providers: Provider[] = ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude"];
+
+/** Configured models first, then models discovered via /models (deduped). */
+function byokChipModels(provider: ByokProvider): string[] {
+  return [...new Set([...(provider.models || []), ...(provider.available_models || [])])];
+}
 
 function labelProvider(provider: string) {
-  if (provider === "kiro-pro") return "Kiro Pro";
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
   if (provider === "codex") return "Codex";
-  if (provider === "qoder") return "Qoder";
-  if (provider === "gitlab-duo") return "GitLab Duo";
-  if (provider === "youmind") return "YouMind";
+  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "claude") return "Claude";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -88,27 +103,42 @@ export default function Accounts() {
   const [settingsMap, setSettingsMap] = useState<Record<string, string>>({});
   const [now, setNow] = useState<number>(Date.now());
 
-  const [addForm, setAddForm] = useState({ email: "", password: "", provider: "kiro" as Provider, browserEngine: "camoufox", headless: false });
+  const [addForm, setAddForm] = useState({ email: "", password: "", provider: "codebuddy" as Provider, browserEngine: "camoufox", headless: false });
   const [addDialogProvider, setAddDialogProvider] = useState<Provider | null>(null);
   const [instantTokens, setInstantTokens] = useState("");
-  const [cookieValue, setCookieValue] = useState("");
   const [bulkText, setBulkText] = useState("");
-  const [addMode, setAddMode] = useState<"single" | "bulk" | "instant" | "pat" | "apikey">("bulk");
+  const [addMode, setAddMode] = useState<"single" | "bulk" | "instant" | "pat" | "apikey" | "oauth" | "token">("bulk");
   const [bulkBrowserEngine, setBulkBrowserEngine] = useState("camoufox");
   const [bulkHeadless, setBulkHeadless] = useState(true);
   const [bulkConcurrency, setBulkConcurrency] = useState(3);
   const [codexOauthBusy, setCodexOauthBusy] = useState(false);
   const [codexOauthAuthUrl, setCodexOauthAuthUrl] = useState("");
   const [codexOauthCallbackUrl, setCodexOauthCallbackUrl] = useState("");
-  const [gitlabBaseUrl, setGitlabBaseUrl] = useState("https://gitlab.com");
-  const [gitlabPat, setGitlabPat] = useState("");
-  const [gitlabLabel, setGitlabLabel] = useState("");
-  const [gitlabBusy, setGitlabBusy] = useState(false);
-  const [youmindApiKey, setYoumindApiKey] = useState("");
-  const [youmindBusy, setYoumindBusy] = useState(false);
+  const [grokCliBusy, setGrokCliBusy] = useState(false);
+  const [grokCliUserCode, setGrokCliUserCode] = useState("");
+  const [grokCliVerifyUri, setGrokCliVerifyUri] = useState("");
+  const [grokCliState, setGrokCliState] = useState<string | null>(null);
+  const grokCliPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [claudeOauthBusy, setClaudeOauthBusy] = useState(false);
+  const [claudeOauthAuthUrl, setClaudeOauthAuthUrl] = useState("");
+  const [claudeOauthCode, setClaudeOauthCode] = useState("");
+  const claudeOauthStateRef = useRef<string | null>(null);
   const [codebuddyChinaApiKey, setCodebuddyChinaApiKey] = useState("");
   const [codebuddyChinaBulkApiKeys, setCodebuddyChinaBulkApiKeys] = useState("");
   const [codebuddyChinaBusy, setCodebuddyChinaBusy] = useState(false);
+  const [codebuddyChinaAccessToken, setCodebuddyChinaAccessToken] = useState("");
+  const [codebuddyChinaUid, setCodebuddyChinaUid] = useState("");
+  const [codebuddyChinaRefreshToken, setCodebuddyChinaRefreshToken] = useState("");
+  const [codebuddyChinaTokenBusy, setCodebuddyChinaTokenBusy] = useState(false);
+  const [codebuddyBulkApiKeys, setCodebuddyBulkApiKeys] = useState("");
+  const [codebuddyBusy, setCodebuddyBusy] = useState(false);
+  const [codebuddyOauthBusy, setCodebuddyOauthBusy] = useState(false);
+  const [codebuddyOauthAuthUrl, setCodebuddyOauthAuthUrl] = useState("");
+  const [codebuddyOauthState, setCodebuddyOauthState] = useState<string | null>(null);
+  const codebuddyOauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [codebuddyAccessToken, setCodebuddyAccessToken] = useState("");
+  const [codebuddyRefreshToken, setCodebuddyRefreshToken] = useState("");
+  const [codebuddyTokenBusy, setCodebuddyTokenBusy] = useState(false);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
   const [loginPendingConcurrency, setLoginPendingConcurrency] = useState(2);
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
@@ -125,6 +155,15 @@ export default function Accounts() {
   });
   const [visibleByokSecrets, setVisibleByokSecrets] = useState<Set<string>>(new Set());
   const [revealingByokSecret, setRevealingByokSecret] = useState<string | null>(null);
+  /** Per-provider test summary, keyed by provider id. */
+  const [byokTest, setByokTest] = useState<
+    Record<number, { state: "testing" | "ok" | "error"; progress?: string; okCount?: number; total?: number; avgLatency?: number; error?: string }>
+  >({});
+  /** Per-model test result, keyed by `${providerId}:${model}`. */
+  const [byokModelTest, setByokModelTest] = useState<
+    Record<string, { state: "testing" | "ok" | "error"; latency?: number; error?: string }>
+  >({});
+  const [byokFetchingModels, setByokFetchingModels] = useState(false);
   const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const codexOauthPopupRef = useRef<Window | null>(null);
   const codexOauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -327,7 +366,7 @@ export default function Accounts() {
       const payload: any = { email: addForm.email, password: addForm.password, provider: addDialogProvider, headless: addForm.headless, browserEngine: addForm.browserEngine };
       await createAccount(payload);
       showSuccess("Account added and bot login started.");
-      setAddForm({ email: "", password: "", provider: "kiro", browserEngine: "camoufox", headless: false });
+      setAddForm({ email: "", password: "", provider: "codebuddy", browserEngine: "camoufox", headless: false });
       setAddDialogProvider(null);
       await load();
       navigate("/bot-logs");
@@ -349,74 +388,6 @@ export default function Accounts() {
       setAddDialogProvider(null);
       await load();
     } catch (err) { showError(err); }
-  }
-
-  async function handleCookieLogin() {
-    if (!cookieValue.trim()) { showError(new Error("Paste Personal Access Token (PAT)")); return; }
-    try {
-      const res = await fetchApi<any>("/api/accounts", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: "qoder",
-          personalToken: cookieValue.trim(),
-        }),
-      });
-      showSuccess("Qoder account added successfully");
-      setCookieValue("");
-      setAddDialogProvider(null);
-      await load();
-    } catch (err) { showError(err); }
-  }
-
-  async function handleGitlabPatLogin() {
-    const pat = gitlabPat.trim();
-    if (!pat) { showError(new Error("Paste GitLab Personal Access Token")); return; }
-    const baseUrl = (gitlabBaseUrl || "https://gitlab.com").trim().replace(/\/$/, "");
-    setGitlabBusy(true);
-    try {
-      const res = await fetchApi<any>("/api/accounts/gitlab-duo", {
-        method: "POST",
-        body: JSON.stringify({
-          gitlab_base_url: baseUrl,
-          pat,
-          label: gitlabLabel.trim() || undefined,
-        }),
-      });
-      const labelText = res?.account?.email || res?.email || "account";
-      showSuccess(`GitLab Duo ${labelText} added successfully`);
-      setGitlabPat("");
-      setGitlabLabel("");
-      setAddDialogProvider(null);
-      await load();
-    } catch (err) { showError(err); }
-    finally { setGitlabBusy(false); }
-  }
-
-  async function handleYouMindApiKeyLogin() {
-    const apiKey = youmindApiKey.trim();
-    if (!apiKey) { showError(new Error("Paste YouMind API key")); return; }
-    if (!apiKey.startsWith("sk-ym-")) {
-      showError(new Error("YouMind API key must start with sk-ym-"));
-      return;
-    }
-    setYoumindBusy(true);
-    try {
-      const res = await fetchApi<any>("/api/accounts", {
-        method: "POST",
-        body: JSON.stringify({
-          provider: "youmind",
-          apiKey,
-        }),
-      });
-      const labelText = res?.email || "account";
-      showSuccess(res?.updated
-        ? `YouMind key updated (${labelText})`
-        : `YouMind ${labelText} added successfully`);
-      setYoumindApiKey("");
-      setAddDialogProvider(null);
-      await load();
-    } catch (err) { showError(err); }
-    finally { setYoumindBusy(false); }
   }
 
   async function handleCodebuddyChinaApiKeyLogin() {
@@ -475,6 +446,152 @@ export default function Accounts() {
       await load();
     } catch (err) { showError(err); }
     finally { setCodebuddyChinaBusy(false); }
+  }
+
+  async function handleCodebuddyChinaAccessTokenImport() {
+    const accessToken = codebuddyChinaAccessToken.trim();
+    if (!accessToken) { showError(new Error("Paste CodeBuddy CN access_token")); return; }
+    const uid = codebuddyChinaUid.trim();
+    const refreshToken = codebuddyChinaRefreshToken.trim();
+    setCodebuddyChinaTokenBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy-china",
+          accessToken,
+          uid: uid || undefined,
+          tokens: refreshToken ? { refresh_token: refreshToken } : undefined,
+        }),
+      });
+      const labelText = res?.email || "account";
+      showSuccess(res?.updated
+        ? `CodeBuddy CN token updated (${labelText})`
+        : `CodeBuddy CN ${labelText} added successfully`);
+      setCodebuddyChinaAccessToken("");
+      setCodebuddyChinaUid("");
+      setCodebuddyChinaRefreshToken("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyChinaTokenBusy(false); }
+  }
+
+  async function handleCodebuddyBulkApiKey() {
+    const keysText = codebuddyBulkApiKeys.trim();
+    if (!keysText) { showError(new Error("Paste CodeBuddy API keys")); return; }
+
+    const keys = keysText.split("\n").map(k => k.trim()).filter(Boolean);
+    if (keys.length === 0) { showError(new Error("No valid API keys found")); return; }
+
+    for (const key of keys) {
+      if (!key.startsWith("ck_")) {
+        showError(new Error(`Invalid API key format: ${key} (must start with ck_)`));
+        return;
+      }
+    }
+
+    setCodebuddyBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy",
+          apiKeys: keysText,
+        }),
+      });
+      showSuccess(`Added ${res.count} CodeBuddy account(s) successfully`);
+      setCodebuddyBulkApiKeys("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyBusy(false); }
+  }
+
+  function clearCodebuddyOAuthPolling() {
+    if (codebuddyOauthPollRef.current) {
+      clearInterval(codebuddyOauthPollRef.current);
+      codebuddyOauthPollRef.current = null;
+    }
+  }
+
+  function resetCodebuddyOAuthFlow() {
+    clearCodebuddyOAuthPolling();
+    setCodebuddyOauthBusy(false);
+    setCodebuddyOauthAuthUrl("");
+    setCodebuddyOauthState(null);
+  }
+
+  async function handleCodebuddyOAuthLogin() {
+    if (codebuddyOauthBusy) return;
+    setCodebuddyOauthBusy(true);
+    setError(null);
+    clearCodebuddyOAuthPolling();
+
+    try {
+      const device = await startCodebuddyDeviceCode();
+      setCodebuddyOauthState(device.state);
+      setCodebuddyOauthAuthUrl(device.authUrl);
+      window.open(device.authUrl, "_blank", "noopener,noreferrer");
+
+      const intervalMs = Math.max(3, device.interval || 5) * 1000;
+      codebuddyOauthPollRef.current = setInterval(async () => {
+        try {
+          const status = await pollCodebuddyOAuth(device.state);
+          if (status.status === "done") {
+            resetCodebuddyOAuthFlow();
+            showSuccess(`CodeBuddy connected: ${status.connection?.displayName || status.connection?.email || "account added"}`);
+            setAddDialogProvider(null);
+            await load();
+            return;
+          }
+          if (status.status === "error" || status.status === "expired" || status.status === "cancelled" || status.status === "unknown") {
+            resetCodebuddyOAuthFlow();
+            showError(new Error(status.error || "CodeBuddy OAuth failed"));
+          }
+        } catch (pollError) {
+          resetCodebuddyOAuthFlow();
+          showError(pollError);
+        }
+      }, intervalMs);
+    } catch (err) {
+      resetCodebuddyOAuthFlow();
+      showError(err);
+    }
+  }
+
+  async function handleCodebuddyOAuthCancel() {
+    const state = codebuddyOauthState;
+    resetCodebuddyOAuthFlow();
+    if (state) {
+      try { await cancelCodebuddyOAuth(state); } catch { /* ignore */ }
+    }
+  }
+
+  async function handleCodebuddyAccessTokenImport() {
+    const accessToken = codebuddyAccessToken.trim();
+    if (!accessToken) { showError(new Error("Paste CodeBuddy access_token")); return; }
+    const refreshToken = codebuddyRefreshToken.trim();
+    setCodebuddyTokenBusy(true);
+    try {
+      const res = await fetchApi<any>("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "codebuddy",
+          accessToken,
+          tokens: refreshToken ? { refresh_token: refreshToken } : undefined,
+        }),
+      });
+      const labelText = res?.email || "account";
+      showSuccess(res?.updated
+        ? `CodeBuddy token updated (${labelText})`
+        : `CodeBuddy ${labelText} added successfully`);
+      setCodebuddyAccessToken("");
+      setCodebuddyRefreshToken("");
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) { showError(err); }
+    finally { setCodebuddyTokenBusy(false); }
   }
 
   async function handleBulkImport() {
@@ -634,6 +751,104 @@ export default function Accounts() {
     }
   }
 
+  function clearGrokCliPolling() {
+    if (grokCliPollRef.current) {
+      clearInterval(grokCliPollRef.current);
+      grokCliPollRef.current = null;
+    }
+  }
+
+  function resetGrokCliOAuthFlow() {
+    clearGrokCliPolling();
+    setGrokCliBusy(false);
+    setGrokCliUserCode("");
+    setGrokCliVerifyUri("");
+    setGrokCliState(null);
+  }
+
+  async function handleGrokCliDeviceLogin() {
+    if (grokCliBusy) return;
+    setGrokCliBusy(true);
+    setError(null);
+    clearGrokCliPolling();
+
+    try {
+      const device = await startGrokCliDeviceCode();
+      setGrokCliState(device.state);
+      setGrokCliUserCode(device.userCode);
+      setGrokCliVerifyUri(device.verificationUriComplete || device.verificationUri);
+
+      const uri = device.verificationUriComplete || device.verificationUri;
+      if (uri) window.open(uri, "_blank", "noopener,noreferrer");
+
+      let intervalMs = Math.max(3, device.interval || 5) * 1000;
+      grokCliPollRef.current = setInterval(async () => {
+        const state = device.state;
+        try {
+          const status = await pollGrokCliOAuth(state);
+          if (status.status === "done") {
+            clearGrokCliPolling();
+            setGrokCliBusy(false);
+            setGrokCliUserCode("");
+            setGrokCliVerifyUri("");
+            setGrokCliState(null);
+            showSuccess(`Grok CLI connected: ${status.connection?.displayName || status.connection?.email || "account added"}`);
+            setAddDialogProvider(null);
+            await load();
+            return;
+          }
+          if (status.status === "pending") {
+            if (status.interval && status.interval * 1000 !== intervalMs) {
+              intervalMs = Math.max(3, status.interval) * 1000;
+              clearGrokCliPolling();
+              // re-arm with slower interval (slow_down)
+              grokCliPollRef.current = setInterval(async () => {
+                try {
+                  const s2 = await pollGrokCliOAuth(state);
+                  if (s2.status === "done") {
+                    clearGrokCliPolling();
+                    setGrokCliBusy(false);
+                    setGrokCliUserCode("");
+                    setGrokCliVerifyUri("");
+                    setGrokCliState(null);
+                    showSuccess(`Grok CLI connected: ${s2.connection?.displayName || s2.connection?.email || "account added"}`);
+                    setAddDialogProvider(null);
+                    await load();
+                  } else if (s2.status === "error" || s2.status === "expired" || s2.status === "cancelled" || s2.status === "unknown") {
+                    resetGrokCliOAuthFlow();
+                    showError(new Error(s2.error || "Grok CLI OAuth failed"));
+                  }
+                } catch (e) {
+                  resetGrokCliOAuthFlow();
+                  showError(e);
+                }
+              }, intervalMs);
+            }
+            return;
+          }
+          if (status.status === "error" || status.status === "expired" || status.status === "cancelled" || status.status === "unknown") {
+            resetGrokCliOAuthFlow();
+            showError(new Error(status.error || "Grok CLI OAuth failed"));
+          }
+        } catch (pollError) {
+          resetGrokCliOAuthFlow();
+          showError(pollError);
+        }
+      }, intervalMs);
+    } catch (err) {
+      resetGrokCliOAuthFlow();
+      showError(err);
+    }
+  }
+
+  async function handleGrokCliCancel() {
+    const state = grokCliState;
+    resetGrokCliOAuthFlow();
+    if (state) {
+      try { await cancelGrokCliOAuth(state); } catch { /* ignore */ }
+    }
+  }
+
   async function handleCodexOAuthCopyAuthUrl() {
     if (!codexOauthAuthUrl) return;
     await safeCopyText(codexOauthAuthUrl, "Auth URL copied");
@@ -653,16 +868,78 @@ export default function Accounts() {
     }
   }
 
+  function resetClaudeOAuthFlow() {
+    claudeOauthStateRef.current = null;
+    setClaudeOauthBusy(false);
+    setClaudeOauthAuthUrl("");
+    setClaudeOauthCode("");
+  }
+
+  async function handleClaudeOAuthStart() {
+    if (claudeOauthBusy) return;
+    setClaudeOauthBusy(true);
+    setError(null);
+    try {
+      const auth = await startClaudeOAuth();
+      claudeOauthStateRef.current = auth.state;
+      setClaudeOauthAuthUrl(auth.authUrl);
+      setClaudeOauthCode("");
+      window.open(auth.authUrl, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      showError(err);
+      resetClaudeOAuthFlow();
+    } finally {
+      setClaudeOauthBusy(false);
+    }
+  }
+
+  async function handleClaudeOAuthCopyAuthUrl() {
+    if (!claudeOauthAuthUrl) return;
+    await safeCopyText(claudeOauthAuthUrl, "Auth URL copied");
+  }
+
+  async function handleClaudeOAuthSubmitCode() {
+    const state = claudeOauthStateRef.current;
+    const code = claudeOauthCode.trim();
+    if (!state) {
+      showError(new Error("Start OAuth first"));
+      return;
+    }
+    if (!code) {
+      showError(new Error("Paste authorization code (or CODE#STATE)"));
+      return;
+    }
+    setClaudeOauthBusy(true);
+    try {
+      const result = await completeClaudeOAuth({ state, code });
+      resetClaudeOAuthFlow();
+      showSuccess(`Claude connected: ${result.connection?.displayName || result.connection?.email || "account added"}`);
+      setAddDialogProvider(null);
+      await load();
+    } catch (err) {
+      setClaudeOauthBusy(false);
+      showError(err);
+    }
+  }
+
   function handleOpenAddDialog(provider: Provider) {
     resetCodexOAuthFlow();
+    resetGrokCliOAuthFlow();
+    resetClaudeOAuthFlow();
     if (provider === "codex") {
       setAddMode("pat");
     }
-    if (provider === "gitlab-duo") {
+    if (provider === "grok-cli") {
       setAddMode("pat");
     }
-    if (provider === "youmind") {
+    if (provider === "claude") {
       setAddMode("pat");
+    }
+    if (provider === "codebuddy") {
+      setAddMode("oauth");
+    }
+    if (provider === "codebuddy-china") {
+      setAddMode("apikey");
     }
     setAddDialogProvider(provider);
   }
@@ -673,7 +950,17 @@ export default function Accounts() {
     if (state) {
       stopCodexOAuth(state).catch(() => {});
     }
+    const claudeState = claudeOauthStateRef.current;
+    resetClaudeOAuthFlow();
+    if (claudeState) {
+      cancelClaudeOAuth(claudeState).catch(() => {});
+    }
+    handleGrokCliCancel();
     setCodebuddyChinaBulkApiKeys("");
+    setCodebuddyBulkApiKeys("");
+    setCodebuddyAccessToken("");
+    setCodebuddyRefreshToken("");
+    resetCodebuddyOAuthFlow();
     setAddDialogProvider(null);
   }
 
@@ -805,6 +1092,49 @@ export default function Accounts() {
     })).filter((key) => isEdit || Boolean(key.key));
   }
 
+  async function handleFetchByokModels() {
+    if (!byokForm.base_url.trim()) {
+      showError(new Error("Base URL is required"));
+      return;
+    }
+    let apiKey = byokForm.api_key.trim();
+    if (!apiKey) {
+      for (const key of byokForm.keys) {
+        if (key.key && key.key !== BYOK_KEY_PLACEHOLDER) { apiKey = key.key.trim(); break; }
+        if (key.id && key.key === BYOK_KEY_PLACEHOLDER) {
+          try {
+            const revealed = await revealByokKey(key.id);
+            if (revealed.key) { apiKey = revealed.key.trim(); break; }
+          } catch (err) { /* try next key */ }
+        }
+      }
+    }
+    if (!apiKey) {
+      showError(new Error("At least one API key is required"));
+      return;
+    }
+    setByokFetchingModels(true);
+    try {
+      const res = await fetchByokModels({
+        base_url: byokForm.base_url.trim(),
+        api_key: apiKey,
+        format: byokForm.format,
+      });
+      if (res.error) { showError(new Error(res.error)); return; }
+      const existing = new Set(byokForm.models.split(",").map((m) => m.trim()).filter(Boolean));
+      const added = (res.models || []).filter((m) => !existing.has(m));
+      setByokForm((f) => ({
+        ...f,
+        models: [...new Set([...existing, ...added])].join(", "),
+      }));
+      showSuccess(`Fetched ${res.models.length} models — added ${added.length} new`);
+    } catch (err) {
+      showError(err);
+    } finally {
+      setByokFetchingModels(false);
+    }
+  }
+
   async function handleAddByok() {
     if (!byokForm.label || !byokForm.base_url || !byokForm.models) {
       showError(new Error("Provider name, base URL, and models are required"));
@@ -912,20 +1242,55 @@ export default function Accounts() {
     setByokDialogOpen(false);
   }
 
-  async function handleTestByok(id: number, label: string) {
-    try {
-      const result = await testByokProvider(id);
-      if (result.success) {
-        const latency = result.latency_ms ? ` · ${result.latency_ms}ms` : "";
-        const fixed = result.auto_fixed ? " — auto-fixed to active!" : "";
-        showSuccess(`✓ ${label} OK (format: ${result.format}, model: ${result.model}${latency})${fixed}`);
-        if (result.auto_fixed) await load();
-      } else {
-        showError(new Error(result.error || "Connection test failed"));
-      }
-    } catch (err) {
-      showError(err);
+  /** Test every configured model of a provider, sequentially, one request each. */
+  async function handleTestByok(provider: ByokProvider) {    const models = provider.models?.length ? provider.models : provider.available_models || [];
+    if (!models.length) {
+      setByokTest((m) => ({ ...m, [provider.id]: { state: "error", error: "No models configured" } }));
+      return;
     }
+
+    const results: { ok: boolean; latency?: number; error?: string }[] = [];
+    let autoFixed = false;
+
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+      setByokTest((m) => ({ ...m, [provider.id]: { state: "testing", progress: `${i + 1}/${models.length}` } }));
+      setByokModelTest((m) => ({ ...m, [`${provider.id}:${model}`]: { state: "testing" } }));
+      try {
+        const result = await testByokProvider(provider.id, model);
+        if (result.success) {
+          results.push({ ok: true, latency: result.latency_ms });
+          setByokModelTest((m) => ({ ...m, [`${provider.id}:${model}`]: { state: "ok", latency: result.latency_ms } }));
+          if (result.auto_fixed) autoFixed = true;
+        } else {
+          results.push({ ok: false, error: result.error || "Test failed" });
+          setByokModelTest((m) => ({ ...m, [`${provider.id}:${model}`]: { state: "error", error: result.error || "Test failed" } }));
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : "Test failed";
+        results.push({ ok: false, error });
+        setByokModelTest((m) => ({ ...m, [`${provider.id}:${model}`]: { state: "error", error } }));
+      }
+    }
+
+    if (autoFixed) await load();
+
+    const okCount = results.filter((r) => r.ok).length;
+    const latencies = results.filter((r) => r.ok && r.latency != null).map((r) => r.latency!);
+    const avgLatency = latencies.length
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+      : undefined;
+    const firstError = results.find((r) => !r.ok)?.error;
+    setByokTest((m) => ({
+      ...m,
+      [provider.id]: {
+        state: okCount === models.length ? "ok" : "error",
+        okCount,
+        total: models.length,
+        avgLatency,
+        error: okCount < models.length ? firstError : undefined,
+      },
+    }));
   }
 
   async function handleDeleteByok(id: number, label: string) {
@@ -957,36 +1322,62 @@ export default function Accounts() {
     });
   }, [accounts]);
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Accounts</h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">Manage provider accounts</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleLoginAll}>
-            <Play className="w-4 h-4 mr-2" /> Login Pending
-          </Button>
-        </div>
-      </div>
+  const totals = useMemo(
+    () => ({
+      accounts: accounts.length,
+      active: accounts.filter((a) => a.status === "active").length,
+      pending: accounts.filter((a) => a.status === "pending").length,
+      error: accounts.filter((a) => a.status === "error").length,
+    }),
+    [accounts]
+  );
 
-      {/* Messages */}
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Accounts"
+        meta={
+          <>
+            <span>{totals.accounts} accounts</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span className={totals.active > 0 ? "text-[var(--success)]" : undefined}>{totals.active} active</span>
+            {totals.pending > 0 && (
+              <>
+                <span aria-hidden className="text-[var(--border)]">·</span>
+                <span className="text-[var(--warning)]">{totals.pending} pending</span>
+              </>
+            )}
+            {totals.error > 0 && (
+              <>
+                <span aria-hidden className="text-[var(--border)]">·</span>
+                <span className="text-[var(--error)]">{totals.error} error</span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLoginAll}>
+              <Play className="w-3.5 h-3.5" /> Login pending
+            </Button>
+          </>
+        }
+      />
+
       {(message || error) && (
-        <div className={`rounded-md p-3 text-sm ${message ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
+        <p className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}>
           {message || error}
-        </div>
+        </p>
       )}
 
       {/* Queue status - Login only */}
       {(Number(queue?.active || 0) > 0 || Number(queue?.queued || 0) > 0) && (
-        <div className="rounded-md border border-[var(--border)] bg-[var(--card)] p-3 text-xs text-[var(--muted-foreground)]">
-          Login: {Number(queue?.active || 0)} running, {Number(queue?.queued || 0)} queued
-        </div>
+        <p className="border-l-2 border-[var(--warning)] bg-[var(--warning)]/8 px-3 py-2 font-mono text-[11px] text-[var(--warning)]">
+          Login: {Number(queue?.active || 0)} running · {Number(queue?.queued || 0)} queued
+        </p>
       )}
 
       {/* Provider cards */}
@@ -994,81 +1385,70 @@ export default function Accounts() {
         {providerStats.map((stat) => (
           <Card
             key={stat.provider}
-            className="border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors"
+            className="overflow-hidden border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors"
             onClick={() => navigate(`/accounts/${stat.provider}`)}
           >
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base">{labelProvider(stat.provider)}</CardTitle>
-                <span className="text-xs text-[var(--muted-foreground)]">{stat.total} accounts</span>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Status grid */}
-              <div className="grid grid-cols-4 gap-2 text-center">
-                <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--success)]">{stat.active}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Active</p>
-                </div>
-                <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--warning)]">{stat.exhausted}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Exhausted</p>
-                </div>
-                <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--warning)]">{stat.pending}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Pending</p>
-                </div>
-                <div className="rounded-md bg-[var(--secondary)] p-2">
-                  <p className="text-lg font-bold text-[var(--error)]">{stat.error}</p>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">Error</p>
-                </div>
-              </div>
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+              <h2 className="eyebrow truncate text-[var(--foreground)]">{labelProvider(stat.provider)}</h2>
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                {stat.total} accounts
+              </span>
+            </div>
 
+            {/* Status readout: one divided strip, same as VccPool / BotLogs */}
+            <div className="grid grid-cols-4 divide-x divide-[var(--border)] border-b border-[var(--border)]">
+              <Stat label="Active" value={stat.active} tone={stat.active > 0 ? "var(--success)" : undefined} />
+              <Stat label="Exhausted" value={stat.exhausted} tone={stat.exhausted > 0 ? "var(--warning)" : undefined} />
+              <Stat label="Pending" value={stat.pending} tone={stat.pending > 0 ? "var(--warning)" : undefined} />
+              <Stat label="Error" value={stat.error} tone={stat.error > 0 ? "var(--error)" : undefined} />
+            </div>
+
+            <div className="space-y-3 px-4 py-3">
               {/* Credits remaining */}
               <div className="space-y-1.5">
-                <div className="flex justify-between text-xs">
-                  <span className="text-[var(--muted-foreground)]">Credits</span>
-                  <span className="text-[var(--foreground)]">
-                    {stat.credits.remaining.toFixed(1)} / {stat.credits.total.toFixed(1)} remaining
+                <div className="flex justify-between font-mono text-[11px]">
+                  <span className="eyebrow">Credits</span>
+                  <span className="tabular-nums text-[var(--foreground)]">
+                    {stat.credits.remaining.toFixed(1)} / {stat.credits.total.toFixed(1)}
                   </span>
                 </div>
                 <Progress
                   value={stat.credits.total > 0 ? Math.round((stat.credits.remaining / stat.credits.total) * 100) : 0}
-                  className="h-2"
+                  className="h-1.5"
                 />
               </div>
 
               {/* WarmUp progress - shown while warmup is active */}
               {warmupProgress[stat.provider] && warmupProgress[stat.provider].total > 0 && (
                 <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-[var(--muted-foreground)]">WarmUp</span>
-                    <span className="text-[var(--foreground)]">
-                      {warmupProgress[stat.provider].completed} / {warmupProgress[stat.provider].total} completed
+                  <div className="flex justify-between font-mono text-[11px]">
+                    <span className="eyebrow">WarmUp</span>
+                    <span className="tabular-nums text-[var(--foreground)]">
+                      {warmupProgress[stat.provider].completed} / {warmupProgress[stat.provider].total}
                     </span>
                   </div>
                   <Progress
                     value={warmupProgress[stat.provider].total > 0 ? Math.round((warmupProgress[stat.provider].completed / warmupProgress[stat.provider].total) * 100) : 0}
-                    className="h-2"
+                    className="h-1.5"
                   />
                 </div>
               )}
 
               {/* Auto WarmUp toggle + countdown */}
               <div
-                className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--secondary)]/40 p-2"
+                className="flex items-center justify-between gap-2 border-t border-[var(--hairline)] pt-3"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <Flame className={`h-4 w-4 shrink-0 ${autoWarmupEnabledFor(stat.provider) ? "text-[var(--warning)]" : "text-[var(--muted-foreground)]"}`} />
+                <div className="flex min-w-0 items-center gap-2">
+                  <Flame className={`h-3.5 w-3.5 shrink-0 ${autoWarmupEnabledFor(stat.provider) ? "text-[var(--warning)]" : "text-[var(--muted-foreground)]"}`} />
                   <div className="min-w-0">
-                    <p className="text-xs font-medium text-[var(--foreground)] leading-tight">Auto WarmUp</p>
-                    <p className="text-[10px] text-[var(--muted-foreground)] leading-tight">
+                    <p className="eyebrow">Auto WarmUp</p>
+                    <p className="font-mono text-[10px] leading-tight text-[var(--muted-foreground)]">
                       {autoWarmupEnabledFor(stat.provider)
                         ? autoWarmup?.nextRunAt
-                          ? `Next in ${countdownLabel()} · every ${autoWarmup.intervalMinutes}m`
-                          : `Every ${autoWarmup?.intervalMinutes ?? 15}m`
-                        : "Disabled"}
+                          ? `next in ${countdownLabel()} · every ${autoWarmup.intervalMinutes}m`
+                          : `every ${autoWarmup?.intervalMinutes ?? 15}m`
+                        : "disabled"}
                     </p>
                   </div>
                 </div>
@@ -1091,46 +1471,42 @@ export default function Accounts() {
               {/* Buttons */}
               <div className="grid grid-cols-3 gap-2" onClick={(e) => e.stopPropagation()}>
                 <Button className="w-full" variant="default" size="sm" onClick={() => handleOpenAddDialog(stat.provider)}>
-                  <Plus className="mr-1 h-4 w-4" /> Add
+                  <Plus className="h-3.5 w-3.5" /> Add
                 </Button>
                 <Button className="w-full" variant="outline" size="sm" onClick={() => handleWarmupProvider(stat.provider)} disabled={Boolean(warmupProgress[stat.provider])}>
-                  <RefreshCw className="mr-1 h-4 w-4" /> Warmup
+                  <RefreshCw className="h-3.5 w-3.5" /> Warmup
                 </Button>
                 <Button className="w-full" variant="outline" size="sm" onClick={() => handleRetryErrors(stat.provider)} disabled={stat.error === 0}>
-                  <RotateCcw className="mr-1 h-4 w-4" /> Retry
+                  <RotateCcw className="h-3.5 w-3.5" /> Retry
                 </Button>
               </div>
-            </CardContent>
+            </div>
           </Card>
         ))}
       </div>
 
-      {/* BYOK Providers Section */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-              <Key className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-[var(--foreground)]">Custom Providers (BYOK)</h2>
-              <p className="text-sm text-[var(--muted-foreground)]">Bring Your Own Key — use your own API providers</p>
-            </div>
+      {/* BYOK Providers Section — a section rule, not a hero block */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Key className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+            <h2 className="eyebrow text-[var(--foreground)]">Custom Providers (BYOK)</h2>
+            <span className="hidden font-mono text-[11px] tabular-nums text-[var(--muted-foreground)] sm:inline">
+              <span aria-hidden className="text-[var(--border)]">│</span> {byokProviders.length} configured
+            </span>
           </div>
-          <Button onClick={() => setByokDialogOpen(true)} className="gap-2 shadow-sm">
-            <Plus className="h-4 w-4" /> Add Provider
+          <Button variant="outline" size="sm" onClick={() => setByokDialogOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> Add Provider
           </Button>
         </div>
 
         {byokProviders.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-[var(--primary)]/20 bg-[var(--primary)]/[0.02] p-10 text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[var(--primary)]/10">
-              <Shield className="h-7 w-7 text-[var(--primary)]" />
-            </div>
-            <p className="text-sm font-medium text-[var(--foreground)]">No custom providers configured yet</p>
-            <p className="text-xs text-[var(--muted-foreground)] mt-1.5 mb-4">Connect your own API provider to use custom models with your keys</p>
-            <Button size="sm" onClick={() => setByokDialogOpen(true)} className="gap-2">
-              <Plus className="h-4 w-4" /> Add Your First Provider
+          <div className="rounded-md border border-dashed border-[var(--border)] px-4 py-8 text-center">
+            <Shield className="mx-auto h-6 w-6 text-[var(--muted-foreground)]/40" />
+            <p className="mt-2 font-mono text-[12px] text-[var(--foreground)]">No custom providers configured</p>
+            <p className="mt-1 font-mono text-[11px] text-[var(--muted-foreground)]">Bring your own key — route custom models through your own API keys.</p>
+            <Button size="sm" variant="outline" className="mt-3" onClick={() => setByokDialogOpen(true)}>
+              <Plus className="h-3.5 w-3.5" /> Add Your First Provider
             </Button>
           </div>
         ) : (
@@ -1138,76 +1514,117 @@ export default function Accounts() {
             {byokProviders.map((provider) => (
               <Card
                 key={provider.id}
-                className="border-[var(--border)] overflow-hidden hover:border-[var(--primary)]/50 transition-all duration-200 cursor-pointer"
+                className="cursor-pointer overflow-hidden transition-colors duration-150 hover:border-[var(--primary)]/50"
                 onClick={() => navigate(`/accounts/byok/${provider.label}`)}
               >
-                <CardHeader className="pb-3 hover:bg-[var(--secondary)]/30 transition-colors">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
+                <div className="border-b border-[var(--border)] px-4 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle className="text-base truncate">{provider.label}</CardTitle>
-                        <Badge
-                          variant={(provider.active_key_count || 0) > 0 ? "default" : "secondary"}
-                          className={(provider.active_key_count || 0) > 0
-                            ? "bg-[var(--primary)]/15 text-[var(--primary)] border border-[var(--primary)]/30"
-                            : "bg-[var(--warning)]/10 text-[var(--warning)] border border-[var(--warning)]/30"
-                          }
-                        >
-                          {(provider.active_key_count || 0) > 0 ? "● Ready" : "○ No active key"}
-                        </Badge>
+                        <h3 className="eyebrow truncate text-[var(--foreground)]">{provider.label}</h3>
+                        <span className={`font-mono text-[10px] uppercase tracking-[0.08em] ${(provider.active_key_count || 0) > 0 ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                          {(provider.active_key_count || 0) > 0 ? "● ready" : "○ no active key"}
+                        </span>
                       </div>
-                      <p className="text-xs text-[var(--muted-foreground)] mt-1 truncate">{provider.base_url}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
-                        <span className="rounded-full bg-[var(--secondary)] px-2 py-0.5">{provider.active_key_count ?? 0}/{provider.key_count ?? provider.keys?.length ?? 1} keys active</span>
-                        <span className="rounded-full bg-[var(--secondary)] px-2 py-0.5">LB: {provider.load_balancing_method === "sequential" ? "Sequential" : provider.load_balancing_method === "least_inflight" ? "Least in-flight" : "Round robin"}</span>
-                      </div>
+                      <p className="mt-1 truncate font-mono text-[11px] text-[var(--muted-foreground)]">{provider.base_url}</p>
                     </div>
-                    <ChevronDown className="h-4 w-4 -rotate-90 text-[var(--muted-foreground)]" />
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 -rotate-90 text-[var(--muted-foreground)]" />
                   </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[var(--muted-foreground)]">Format</span>
-                      <span className="text-[var(--foreground)] font-medium">{provider.format}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[var(--muted-foreground)]">Models</span>
-                      <span className="text-[var(--foreground)] font-medium">{provider.models.length}</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-[var(--muted-foreground)]">API Keys</span>
-                      <span className="text-[var(--foreground)] font-medium">{provider.active_key_count ?? 0} active / {provider.key_count ?? provider.keys?.length ?? 1} total</span>
-                    </div>
-                  </div>
+                </div>
 
+                {/* Readout strip — same divided pattern as the OAuth cards above */}
+                <div className="grid grid-cols-3 divide-x divide-[var(--border)] border-b border-[var(--border)]">
+                  <Stat label="Format" value={provider.format} />
+                  <Stat label="Models" value={provider.models.length} />
+                  <Stat
+                    label="Keys"
+                    value={`${provider.active_key_count ?? 0}/${provider.key_count ?? provider.keys?.length ?? 1}`}
+                    tone={(provider.active_key_count || 0) > 0 ? "var(--success)" : "var(--warning)"}
+                  />
+                </div>
+
+                <div className="space-y-3 px-4 py-3">
                   <div className="space-y-1.5">
-                    <p className="text-xs text-[var(--muted-foreground)]">Available Models</p>
-                    <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                      {provider.available_models?.slice(0, 10).map((model) => (
-                        <Badge
-                          key={model}
-                          variant="outline"
-                          className="text-xs border-[var(--primary)]/20 text-[var(--primary)]/80 bg-[var(--primary)]/[0.05] font-mono cursor-copy"
-                          onClick={(e) => { e.stopPropagation(); copyByokModel(model); }}
-                          title="Click to copy model id"
-                        >
-                          {model}
-                        </Badge>
-                      ))}
-                      {provider.available_models && provider.available_models.length > 10 && (
-                        <Badge variant="outline" className="text-xs bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/30 font-medium">
-                          +{provider.available_models.length - 10} more
-                        </Badge>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="eyebrow">Models</p>
+                      <p className="font-mono text-[10px] text-[var(--muted-foreground)]/70">click id to copy · ⚡ to test</p>
+                    </div>
+                    <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto">
+                      {byokChipModels(provider).slice(0, 10).map((model) => {
+                        const mt = byokModelTest[`${provider.id}:${model}`];
+                        const configured = provider.models?.includes(model);
+                        return (
+                          <span
+                            key={model}
+                            className={`inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 font-mono text-[11px] ${
+                              mt?.state === "error"
+                                ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error)]"
+                                : mt?.state === "ok"
+                                  ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]"
+                                  : configured
+                                    ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary)]/80"
+                                    : "border-dashed border-[var(--border)] bg-transparent text-[var(--muted-foreground)]"
+                            }`}
+                            title={mt?.error || (configured ? model : `${model} (discovered, not in routing list)`)}
+                          >
+                            <span
+                              className="cursor-copy truncate"
+                              onClick={(e) => { e.stopPropagation(); copyByokModel(model); }}
+                              title="Click to copy model id"
+                            >
+                              {model}
+                            </span>
+                            {mt?.state === "ok" && mt.latency != null && (
+                              <span className="shrink-0 tabular-nums opacity-80">{mt.latency}ms</span>
+                            )}
+                            <button
+                              type="button"
+                              className="shrink-0 cursor-pointer rounded-full p-0.5 opacity-60 transition-opacity hover:opacity-100"
+                              aria-label={`Test ${model}`}
+                              title={`Test ${model}`}
+                              disabled={mt?.state === "testing"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setByokModelTest((m) => ({ ...m, [`${provider.id}:${model}`]: { state: "testing" } }));
+                                testByokProvider(provider.id, model)
+                                  .then((result) => {
+                                    setByokModelTest((m) => ({
+                                      ...m,
+                                      [`${provider.id}:${model}`]: result.success
+                                        ? { state: "ok", latency: result.latency_ms }
+                                        : { state: "error", error: result.error || "Test failed" },
+                                    }));
+                                    if (result.auto_fixed) load();
+                                  })
+                                  .catch((err) => {
+                                    setByokModelTest((m) => ({
+                                      ...m,
+                                      [`${provider.id}:${model}`]: { state: "error", error: err instanceof Error ? err.message : "Test failed" },
+                                    }));
+                                  });
+                              }}
+                            >
+                              {mt?.state === "testing" ? (
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Zap className="h-3 w-3" />
+                              )}
+                            </button>
+                          </span>
+                        );
+                      })}
+                      {byokChipModels(provider).length > 10 && (
+                        <span className="inline-flex items-center rounded-full border border-[var(--border)] px-2 py-0.5 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                          +{byokChipModels(provider).length - 10} more
+                        </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-[var(--border)]/50">
+                  <div className="grid grid-cols-3 gap-2 border-t border-[var(--hairline)] pt-3">
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 text-[var(--foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                       onClick={(e) => { e.stopPropagation(); navigate(`/accounts/byok/${provider.label}`); }}
                     >
                       <Pencil className="h-3.5 w-3.5" /> Manage
@@ -1215,21 +1632,45 @@ export default function Accounts() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]"
-                      onClick={(e) => { e.stopPropagation(); handleTestByok(provider.id, provider.label); }}
+                      className="border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]"
+                      onClick={(e) => { e.stopPropagation(); handleTestByok(provider); }}
                     >
-                      <Zap className="h-3.5 w-3.5" /> Test
+                      {byokTest[provider.id]?.state === "testing" ? (
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Zap className="h-3.5 w-3.5" />
+                      )}
+                      Test
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 border-[var(--error)]/30 text-[var(--error)] hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
+                      className="border-[var(--error)]/30 text-[var(--error)] hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
                       onClick={(e) => { e.stopPropagation(); handleDeleteByok(provider.id, provider.label); }}
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Delete
                     </Button>
                   </div>
-                </CardContent>
+                  {byokTest[provider.id] && (
+                    <div
+                      role="status"
+                      className={`border-l-2 px-3 py-2 font-mono text-[11px] ${
+                        byokTest[provider.id].state === "testing"
+                          ? "border-[var(--border)] bg-[var(--secondary)]/50 text-[var(--muted-foreground)]"
+                          : byokTest[provider.id].state === "ok"
+                            ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]"
+                            : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"
+                      }`}
+                    >
+                      {byokTest[provider.id].state === "testing" &&
+                        `Testing models ${byokTest[provider.id].progress || ""}...`}
+                      {byokTest[provider.id].state === "ok" &&
+                        `✓ ${byokTest[provider.id].okCount}/${byokTest[provider.id].total} models OK${byokTest[provider.id].avgLatency ? ` · avg ${byokTest[provider.id].avgLatency}ms` : ""}`}
+                      {byokTest[provider.id].state === "error" &&
+                        `✗ ${byokTest[provider.id].okCount ?? 0}/${byokTest[provider.id].total} OK · ${byokTest[provider.id].error}`}
+                    </div>
+                  )}
+                </div>
               </Card>
             ))}
           </div>
@@ -1241,7 +1682,7 @@ export default function Accounts() {
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--primary)]/10 text-[var(--primary)]">
                 <Key className="h-4.5 w-4.5" />
               </div>
               <div>
@@ -1254,11 +1695,11 @@ export default function Accounts() {
           </DialogHeader>
           <div className="space-y-4 pt-3">
             {/* Connection Settings */}
-            <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/[0.06] p-3.5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Connection</p>
+            <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="eyebrow">Connection</p>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[var(--foreground)]">Provider Name</label>
+                <label className="eyebrow">Provider Name</label>
                 <Input
                   value={byokForm.label}
                   onChange={(e) => setByokForm({ ...byokForm, label: e.target.value })}
@@ -1266,13 +1707,13 @@ export default function Accounts() {
                   readOnly={byokEditId !== null}
                   className={`focus:ring-1 focus:ring-[var(--ring)] ${byokEditId ? 'bg-[var(--muted)] opacity-60' : ''}`}
                 />
-                <p className="text-xs text-[var(--muted-foreground)]">
+                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                   {byokEditId ? 'Prefix cannot be changed after creation' : 'Used as model prefix (e.g., "openrouter-gpt-4")'}
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[var(--foreground)]">Base URL</label>
+                <label className="eyebrow">Base URL</label>
                 <Input
                   value={byokForm.base_url}
                   onChange={(e) => setByokForm({ ...byokForm, base_url: e.target.value })}
@@ -1283,17 +1724,17 @@ export default function Accounts() {
             </div>
 
             {/* Authentication */}
-            <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/[0.06] p-3.5">
+            <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5">
                   <Lock className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-                  <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">API Key Pool</p>
+                  <p className="eyebrow">API Key Pool</p>
                 </div>
-                <Button type="button" variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={addByokKeyRow}>
+                <Button type="button" variant="outline" size="sm" className="h-7" onClick={addByokKeyRow}>
                   <Plus className="h-3 w-3" /> Add Key
                 </Button>
               </div>
-              <p className="text-xs text-[var(--muted-foreground)]">
+              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 Multiple keys under the same provider prefix are load-balanced automatically. Existing keys are masked; leave them masked to keep the stored secret.
               </p>
 
@@ -1305,12 +1746,15 @@ export default function Accounts() {
                         value={keyRow.label}
                         onChange={(e) => updateByokKeyRow(index, { label: e.target.value })}
                         placeholder="key label e.g. main"
-                        className="h-8 flex-1 font-mono text-xs"
+                        className="h-8 flex-1 font-mono text-[11px]"
                       />
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={keyRow.enabled}
+                        aria-label={`${keyRow.enabled ? "Disable" : "Enable"} key ${keyRow.label || index + 1}`}
                         onClick={() => updateByokKeyRow(index, { enabled: !keyRow.enabled })}
-                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${keyRow.enabled ? "bg-[var(--primary)]" : "bg-[var(--border)]"}`}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${keyRow.enabled ? "bg-[var(--primary)]" : "bg-[var(--border)]"}`}
                         title={keyRow.enabled ? "Enabled" : "Disabled"}
                       >
                         <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${keyRow.enabled ? "translate-x-5" : "translate-x-1"}`} />
@@ -1333,7 +1777,7 @@ export default function Accounts() {
                                 if (keyRow.key === BYOK_KEY_PLACEHOLDER) updateByokKeyRow(index, { key: "" });
                               }}
                               placeholder={byokEditId ? "Paste new key to replace, or keep masked" : "sk-..."}
-                              className="h-8 flex-1 font-mono text-xs"
+                              className="h-8 flex-1 font-mono text-[11px]"
                             />
                             <Button
                               type="button"
@@ -1362,33 +1806,31 @@ export default function Accounts() {
             </div>
 
             {/* Model Configuration */}
-            <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/[0.06] p-3.5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Configuration</p>
+            <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Configuration</p>
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-[var(--foreground)]">API Format</label>
-                  <select
+                  <label className="eyebrow">API Format</label>
+                  <Select
                     value={byokForm.format}
                     onChange={(e) => setByokForm({ ...byokForm, format: e.target.value as any })}
-                    className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
                   >
                     <option value="auto">Auto-detect</option>
                     <option value="openai">OpenAI-compatible</option>
                     <option value="anthropic">Anthropic</option>
-                  </select>
+                  </Select>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-[var(--foreground)]">Load Balancing</label>
-                  <select
+                  <label className="eyebrow">Load Balancing</label>
+                  <Select
                     value={byokForm.load_balancing_method}
                     onChange={(e) => setByokForm({ ...byokForm, load_balancing_method: e.target.value as any })}
-                    className="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
                   >
                     <option value="round_robin">Round Robin</option>
                     <option value="sequential">Sequential</option>
-                  </select>
+                  </Select>
                   <p className="text-[10px] text-[var(--muted-foreground)]">
                     Per-provider BYOK setting. Round Robin distributes requests; Sequential prefers the first healthy key.
                   </p>
@@ -1396,14 +1838,27 @@ export default function Accounts() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-sm font-medium text-[var(--foreground)]">Models</label>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="eyebrow">Models</label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFetchByokModels}
+                    disabled={byokFetchingModels}
+                    title="Fetch model list from this base URL + API key"
+                  >
+                    {byokFetchingModels ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
+                    {byokFetchingModels ? "Fetching..." : "Fetch Models"}
+                  </Button>
+                </div>
                 <textarea
                   value={byokForm.models}
                   onChange={(e) => setByokForm({ ...byokForm, models: e.target.value })}
                   placeholder="gpt-4, claude-3-opus, llama-3"
-                  className="w-full h-20 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  className="h-20 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 />
-                <p className="text-xs text-[var(--muted-foreground)]">Comma-separated list of model IDs</p>
+                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Comma-separated list of model IDs</p>
               </div>
             </div>
 
@@ -1411,7 +1866,7 @@ export default function Accounts() {
               <Button variant="outline" onClick={handleCloseByokDialog} className="text-[var(--muted-foreground)]">
                 Cancel
               </Button>
-              <Button onClick={byokEditId ? handleUpdateByok : handleAddByok} className="gap-2 shadow-sm">
+              <Button onClick={byokEditId ? handleUpdateByok : handleAddByok} >
                 {byokEditId ? (
                   <><Pencil className="h-4 w-4" /> Update Provider</>
                 ) : (
@@ -1432,12 +1887,12 @@ export default function Accounts() {
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="flex items-center gap-3">
-              <label className="text-sm text-[var(--muted-foreground)]">Concurrent:</label>
-              <select value={loginPendingConcurrency} onChange={(e) => setLoginPendingConcurrency(Number(e.target.value))} className="h-8 w-20 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 text-sm text-[var(--foreground)]">
+              <label className="eyebrow">Concurrent:</label>
+              <Select value={loginPendingConcurrency} onChange={(e) => setLoginPendingConcurrency(Number(e.target.value))} className="w-20" aria-label="Concurrent logins">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
                   <option key={n} value={n}>{n}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setLoginPendingDialog(false)}>Cancel</Button>
@@ -1454,196 +1909,93 @@ export default function Accounts() {
         if (open) return;
         handleCloseAddDialog();
       }}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DTitle>Add {addDialogProvider ? labelProvider(addDialogProvider) : ""} Account</DTitle>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader className="space-y-2 text-left">
+            <DTitle className="pr-8">Add {addDialogProvider ? labelProvider(addDialogProvider) : ""} Account</DTitle>
             <DialogDescription>
-              {addDialogProvider === "kiro-pro" || addDialogProvider === "codex"
+              {addDialogProvider === "codex"
                 ? "Add via browser login or instant login with API key/token."
-                : addDialogProvider === "qoder"
-                ? "Add via PAT, bulk Google accounts, or single account."
-                : addDialogProvider === "gitlab-duo"
-                ? "Add via Personal Access Token, single Gmail (bot login), or bulk email|password."
-                : addDialogProvider === "youmind"
-                ? "Paste your YouMind API key (sk-ym-...). Server will validate against the OpenAPI relay and store it encrypted."
+                : addDialogProvider === "codebuddy"
+                ? "Login CodeBuddy global (www.codebuddy.ai) via OAuth access_token, atau paste API keys (ck_...)."
                 : addDialogProvider === "codebuddy-china"
-                ? "Paste CodeBuddy China API keys (ck_...). Satu key per baris untuk bulk import."
+                ? "Paste CodeBuddy China access_token (JWT) atau API keys (ck_...). Satu key per baris untuk bulk import."
+                : addDialogProvider === "grok-cli"
+                ? "Sign in with xAI / Grok Build via device code. Uses cli-chat-proxy.grok.com subscription credits."
+                : addDialogProvider === "claude"
+                ? "Sign in with Claude Pro/Max via Claude Code OAuth (PKCE). Models use cc- prefix (cc-claude-sonnet-4-6, …)."
                 : `Add account for ${addDialogProvider ? labelProvider(addDialogProvider) : "this provider"}.`}
             </DialogDescription>
           </DialogHeader>
 
           {/* Mode tabs */}
-          {addDialogProvider === "kiro-pro" || addDialogProvider === "codex" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+          {addDialogProvider === "codex" ? (
+            <div className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("instant")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "instant" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "instant" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Instant Login (Token)</button>
               {addDialogProvider === "codex" && <button onClick={() => handleSetCodexMode("pat")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >OAuth Login</button>}
               <button onClick={() => addDialogProvider === "codex" ? handleSetCodexMode("bulk") : setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk (Email|Pass)</button>
               <button onClick={() => addDialogProvider === "codex" ? handleSetCodexMode("single") : setAddMode("single")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Single</button>
             </div>
-          ) : addDialogProvider === "qoder" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
-              <button onClick={() => setAddMode("pat")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >PAT (Token)</button>
-              <button onClick={() => setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Bulk (Email|Pass)</button>
-              <button onClick={() => setAddMode("single")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Single</button>
-            </div>
-          ) : addDialogProvider === "gitlab-duo" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
-              <button onClick={() => setAddMode("pat")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >PAT (Token)</button>
-              <button onClick={() => setAddMode("single")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Gmail (Single)</button>
-              <button onClick={() => setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >Bulk (Email|Pass)</button>
-            </div>
-          ) : addDialogProvider === "youmind" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
-              <button onClick={() => setAddMode("pat")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
-              >API Key (sk-ym-...)</button>
+          ) : addDialogProvider === "codebuddy" ? (
+            <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:grid-cols-3">
+              <button onClick={() => setAddMode("oauth")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "oauth" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >OAuth (access_token)</button>
+              <button onClick={() => setAddMode("token")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >Access Token</button>
+              <button onClick={() => setAddMode("apikey")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >API Key (ck_...)</button>
             </div>
           ) : addDialogProvider === "codebuddy-china" ? (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+            <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:grid-cols-2">
+              <button onClick={() => setAddMode("token")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >Access Token</button>
               <button onClick={() => setAddMode("apikey")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk API Key (ck_...)</button>
             </div>
+          ) : addDialogProvider === "grok-cli" ? (
+            <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
+              <button onClick={() => setAddMode("pat")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >Device Code OAuth</button>
+            </div>
+          ) : addDialogProvider === "claude" ? (
+            <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
+              <button onClick={() => setAddMode("pat")}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+              >Claude Code OAuth</button>
+            </div>
           ) : (
-            <div className="flex gap-1 rounded-md bg-[var(--secondary)] p-1">
+            <div className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("bulk")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk (Email|Pass)</button>
               <button onClick={() => setAddMode("single")}
-                className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] shadow-sm" : "text-[var(--muted-foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Single</button>
             </div>
           )}
 
           {/* Token / OAuth mode */}
-          {addMode === "pat" && addDialogProvider === "qoder" && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-[var(--foreground)]">Personal Access Token (PAT)</label>
-                <textarea
-                  value={cookieValue}
-                  onChange={(e) => setCookieValue(e.target.value)}
-                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
-                  placeholder="qd-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Paste Qoder Personal Access Token. Server akan menukar dengan jobToken otomatis dan menyimpan kredensial untuk inference.</p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setAddDialogProvider(null)}>Cancel</Button>
-                <Button onClick={handleCookieLogin}>Add Account</Button>
-              </div>
-            </div>
-          )}
-
-          {addMode === "pat" && addDialogProvider === "youmind" && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-[var(--foreground)]">YouMind API Key</label>
-                <textarea
-                  value={youmindApiKey}
-                  onChange={(e) => setYoumindApiKey(e.target.value)}
-                  className="mt-1 w-full h-32 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
-                  placeholder="sk-ym-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                  disabled={youmindBusy}
-                />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Paste your YouMind API key from{" "}
-                  <a href="https://youmind.com" target="_blank" rel="noreferrer" className="underline">youmind.com</a>{" "}
-                  Settings → API Keys. Server validates via <code>POST /openapi/v1/listBoards</code> and stores the key encrypted.
-                  Available models: <code>ym-claude-opus-4.6/4.7/4.8</code>, <code>ym-claude-sonnet-4.6</code>, <code>ym-gpt-5.5</code>, <code>ym-gpt-4o</code>.
-                </p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={youmindBusy}>Cancel</Button>
-                <Button onClick={handleYouMindApiKeyLogin} disabled={youmindBusy}>
-                  {youmindBusy ? "Validating..." : "Add Account"}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {addMode === "pat" && addDialogProvider === "gitlab-duo" && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm text-[var(--foreground)]">GitLab Base URL</label>
-                <Input
-                  value={gitlabBaseUrl}
-                  onChange={(e) => setGitlabBaseUrl(e.target.value)}
-                  placeholder="https://gitlab.com"
-                  className="mt-1 font-mono text-sm"
-                  disabled={gitlabBusy}
-                />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Default <code>https://gitlab.com</code>. Ganti kalau pakai self-hosted GitLab.</p>
-              </div>
-              <div>
-                <label className="text-sm text-[var(--foreground)]">Personal Access Token (PAT)</label>
-                <textarea
-                  value={gitlabPat}
-                  onChange={(e) => setGitlabPat(e.target.value)}
-                  className="mt-1 w-full h-28 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
-                  placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
-                  disabled={gitlabBusy}
-                />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Butuh scope <code>api</code>. Buat di{" "}
-                  <a
-                    href={`${(gitlabBaseUrl || "https://gitlab.com").replace(/\/$/, "")}/-/user_settings/personal_access_tokens?scopes=api&name=poolprox3-duo`}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="underline text-[var(--foreground)] hover:opacity-80"
-                  >
-                    User Settings → Access Tokens
-                  </a>.
-                </p>
-              </div>
-              <div>
-                <label className="text-sm text-[var(--foreground)]">Label (opsional)</label>
-                <Input
-                  value={gitlabLabel}
-                  onChange={(e) => setGitlabLabel(e.target.value)}
-                  placeholder="default: GitLab username"
-                  className="mt-1"
-                  disabled={gitlabBusy}
-                />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Kosongkan untuk pakai username GitLab. Harus unik per instance.</p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={gitlabBusy}>Cancel</Button>
-                <Button onClick={handleGitlabPatLogin} disabled={gitlabBusy || !gitlabPat.trim()}>
-                  {gitlabBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Validating PAT...</>) : "Add Account"}
-                </Button>
-              </div>
-            </div>
-          )}
-
           {addMode === "apikey" && addDialogProvider === "codebuddy-china" && (
             <div className="space-y-4">
               <div>
-                <label className="text-sm text-[var(--foreground)]">API Keys (satu per baris, prefix ck_)</label>
+                <label className="eyebrow">API Keys (satu per baris, prefix ck_)</label>
                 <textarea
                   value={codebuddyChinaBulkApiKeys}
                   onChange={(e) => setCodebuddyChinaBulkApiKeys(e.target.value)}
-                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="ck_fpigz68zr75s...
 ck_abc123def456...
 ck_xyz789ghi012..."
@@ -1654,7 +2006,7 @@ ck_xyz789ghi012..."
                   Model tersedia: <code>cbc-deepseek-v3</code>, <code>cbc-claude-haiku-4.5</code>, <code>cbc-kimi-k2.5</code>, dll.
                 </p>
               </div>
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyChinaBusy}>Cancel</Button>
                 <Button onClick={handleCodeBuddyChinaBulkApiKey} disabled={codebuddyChinaBusy || !codebuddyChinaBulkApiKeys.trim()}>
                   {codebuddyChinaBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
@@ -1663,26 +2015,251 @@ ck_xyz789ghi012..."
             </div>
           )}
 
+          {addMode === "token" && addDialogProvider === "codebuddy-china" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Paste <code>access_token</code> (JWT) dari CodeBuddy CN (<code>www.codebuddy.cn</code>). User id dibaca
+                otomatis dari klaim JWT. <code>refresh_token</code> opsional untuk rotasi token.
+              </div>
+              <div>
+                <label className="eyebrow">Access Token</label>
+                <textarea
+                  value={codebuddyChinaAccessToken}
+                  onChange={(e) => setCodebuddyChinaAccessToken(e.target.value)}
+                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  placeholder="eyJhbGciOiJSUzI1NiIs..."
+                  disabled={codebuddyChinaTokenBusy}
+                />
+              </div>
+              <div>
+                <label className="eyebrow">UID (opsional)</label>
+                <Input
+                  value={codebuddyChinaUid}
+                  onChange={(e) => setCodebuddyChinaUid(e.target.value)}
+                  placeholder="1a23b0d7-e40b-4011-bbd7-..."
+                  disabled={codebuddyChinaTokenBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Kosongkan jika tidak tahu — user id dibaca dari JWT.</p>
+              </div>
+              <div>
+                <label className="eyebrow">Refresh Token (opsional)</label>
+                <textarea
+                  value={codebuddyChinaRefreshToken}
+                  onChange={(e) => setCodebuddyChinaRefreshToken(e.target.value)}
+                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  placeholder="eyJhbGciOiJIUzUxMiIs..."
+                  disabled={codebuddyChinaTokenBusy}
+                />
+              </div>
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyChinaTokenBusy}>Cancel</Button>
+                <Button onClick={handleCodebuddyChinaAccessTokenImport} disabled={codebuddyChinaTokenBusy || !codebuddyChinaAccessToken.trim()}>
+                  {codebuddyChinaTokenBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Account"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "oauth" && addDialogProvider === "codebuddy" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Login CodeBuddy global (<code>www.codebuddy.ai</code>) via OAuth device flow. Browser akan terbuka —
+                login pakai akun CodeBuddy, lalu <code>access_token</code> otomatis diambil dan akun ditambahkan.
+              </div>
+              {codebuddyOauthAuthUrl ? (
+                <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+                  <div>
+                    <label className="eyebrow">Auth URL</label>
+                    <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                      <code className="flex-1 break-all rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs font-mono text-[var(--foreground)]">
+                        {codebuddyOauthAuthUrl}
+                      </code>
+                      <Button size="sm" variant="outline" onClick={() => window.open(codebuddyOauthAuthUrl, "_blank", "noopener,noreferrer")}>Open</Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                {codebuddyOauthBusy ? (
+                  <Button variant="outline" onClick={handleCodebuddyOAuthCancel}>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Waiting for login... (Stop)
+                  </Button>
+                ) : (
+                  <Button onClick={handleCodebuddyOAuthLogin}>Start OAuth Login</Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {addMode === "token" && addDialogProvider === "codebuddy" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Paste <code>access_token</code> (JWT) dari CodeBuddy. Email &amp; user id dibaca otomatis dari klaim JWT.
+                <code className="ml-1">refresh_token</code> opsional untuk rotasi token.
+              </div>
+              <div>
+                <label className="eyebrow">Access Token</label>
+                <textarea
+                  value={codebuddyAccessToken}
+                  onChange={(e) => setCodebuddyAccessToken(e.target.value)}
+                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  placeholder="eyJhbGciOiJSUzI1NiIs..."
+                  disabled={codebuddyTokenBusy}
+                />
+              </div>
+              <div>
+                <label className="eyebrow">Refresh Token (opsional)</label>
+                <textarea
+                  value={codebuddyRefreshToken}
+                  onChange={(e) => setCodebuddyRefreshToken(e.target.value)}
+                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  placeholder="eyJhbGciOiJIUzUxMiIs..."
+                  disabled={codebuddyTokenBusy}
+                />
+              </div>
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyTokenBusy}>Cancel</Button>
+                <Button onClick={handleCodebuddyAccessTokenImport} disabled={codebuddyTokenBusy || !codebuddyAccessToken.trim()}>
+                  {codebuddyTokenBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Account"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "apikey" && addDialogProvider === "codebuddy" && (
+            <div className="space-y-4">
+              <div>
+                <label className="eyebrow">API Keys (satu per baris, prefix ck_)</label>
+                <textarea
+                  value={codebuddyBulkApiKeys}
+                  onChange={(e) => setCodebuddyBulkApiKeys(e.target.value)}
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  placeholder={"ck_frxegm1rvitc...\nck_abc123def456...\nck_xyz789ghi012..."}
+                  disabled={codebuddyBusy}
+                />
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris. Host <code>www.codebuddy.ai</code>.
+                  Model tersedia: <code>cb-opus-4.7-1m</code>, <code>cb-sonnet-4.6</code>, <code>cb-haiku-4.5</code>, dll.
+                </p>
+              </div>
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => setAddDialogProvider(null)} disabled={codebuddyBusy}>Cancel</Button>
+                <Button onClick={handleCodebuddyBulkApiKey} disabled={codebuddyBusy || !codebuddyBulkApiKeys.trim()}>
+                  {codebuddyBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Importing...</>) : "Add Accounts"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "pat" && addDialogProvider === "claude" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Claude Code OAuth (PKCE). Login di browser Claude Pro/Max, lalu paste code dari success page
+                (<code className="mx-1">CODE</code> atau <code>CODE#STATE</code>.
+                Models: <code>cc-claude-opus-4-8</code>, <code>cc-claude-sonnet-4-6</code>, <code>cc-claude-haiku-4-5</code>.
+              </div>
+              {claudeOauthAuthUrl ? (
+                <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+                  <div>
+                    <label className="eyebrow">Auth URL</label>
+                    <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                      <code className="flex-1 break-all rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs font-mono text-[var(--foreground)]">
+                        {claudeOauthAuthUrl}
+                      </code>
+                      <Button size="sm" variant="outline" onClick={handleClaudeOAuthCopyAuthUrl}>Copy</Button>
+                      <Button size="sm" variant="outline" onClick={() => window.open(claudeOauthAuthUrl, "_blank", "noopener,noreferrer")}>Open</Button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="eyebrow">Authorization code</label>
+                    <Input
+                      value={claudeOauthCode}
+                      onChange={(e) => setClaudeOauthCode(e.target.value)}
+                      placeholder="paste code or CODE#STATE"
+                      className="mt-1.5 font-mono text-[12px]"
+                      disabled={claudeOauthBusy}
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={handleClaudeOAuthSubmitCode} disabled={claudeOauthBusy || !claudeOauthCode.trim()}>
+                      {claudeOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Completing...</>) : "Submit Code"}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={handleCloseAddDialog} disabled={claudeOauthBusy}>Cancel</Button>
+                <Button onClick={handleClaudeOAuthStart} disabled={claudeOauthBusy}>
+                  {claudeOauthBusy ? (<><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Starting...</>) : "Start OAuth Login"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {addMode === "pat" && addDialogProvider === "grok-cli" && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Device code flow (no browser password bot). Open verification URL, enter the code, wait until account becomes active.
+                Models: <code>grok-4.5</code>, <code>grok-4.5-high/medium/low</code>.
+              </div>
+              {grokCliUserCode ? (
+                <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+                  <div>
+                    <label className="eyebrow">User code</label>
+                    <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                      <code className="flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 font-mono text-[16px] tracking-[0.3em] tabular-nums text-[var(--foreground)]">
+                        {grokCliUserCode}
+                      </code>
+                      <Button size="sm" variant="outline" onClick={() => safeCopyText(grokCliUserCode, "User code copied")}>Copy</Button>
+                    </div>
+                  </div>
+                  {grokCliVerifyUri && (
+                    <div>
+                      <label className="eyebrow">Verification URL</label>
+                      <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                        <code className="flex-1 break-all rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs font-mono text-[var(--foreground)]">
+                          {grokCliVerifyUri}
+                        </code>
+                        <Button size="sm" variant="outline" onClick={() => window.open(grokCliVerifyUri, "_blank", "noopener,noreferrer")}>Open</Button>
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-xs text-[var(--muted-foreground)] flex items-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Waiting for authorization…
+                  </p>
+                </div>
+              ) : null}
+              <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={handleCloseAddDialog} disabled={false}>Cancel</Button>
+                {grokCliBusy ? (
+                  <Button variant="outline" onClick={handleGrokCliCancel}><Loader2 className="h-4 w-4 animate-spin" /> Waiting for authorization</Button>
+                ) : (
+                  <Button onClick={handleGrokCliDeviceLogin}>Start Device Login</Button>
+                )}
+              </div>
+            </div>
+          )}
+
           {addMode === "pat" && addDialogProvider === "codex" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-[var(--border)] bg-[var(--secondary)]/30 p-3 text-sm text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 Login Codex bisa via popup OpenAI atau mode manual: generate auth URL, buka, lalu paste callback URL.
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
                 <Button variant="outline" size="sm" onClick={handleCodexOAuthPrepareManual} disabled={codexOauthBusy || hasPreparedCodexOAuth}>
-                  {hasPreparedCodexOAuth ? "Manual Ready" : codexOauthBusy ? "Preparing..." : "Prepare Manual"}
+                  {hasPreparedCodexOAuth ? "Manual Ready" : codexOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Preparing...</>) : "Prepare Manual"}
                 </Button>
                 <Button size="sm" onClick={handleCodexOAuthLogin} disabled={codexOauthBusy || hasPreparedCodexOAuth}>
-                  {codexOauthBusy ? "Waiting for OAuth..." : "Start OAuth Login"}
+                  {codexOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Waiting for OAuth...</>) : "Start OAuth Login"}
                 </Button>
               </div>
 
               {hasPreparedCodexOAuth && (
-                <div className="space-y-3 rounded-md border border-[var(--border)] p-3">
+                <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <label className="text-sm text-[var(--foreground)]">Auth URL</label>
+                      <label className="eyebrow">Auth URL</label>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={handleCodexOAuthCopyAuthUrl}>Copy</Button>
                         <Button size="sm" variant="outline" onClick={handleCodexOAuthOpenManual}>Open</Button>
@@ -1695,14 +2272,14 @@ ck_xyz789ghi012..."
                     />
                   </div>
 
-                  <div className="rounded-md bg-[var(--secondary)]/30 p-3 text-xs text-[var(--muted-foreground)] space-y-1.5">
+                  <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                     <p><span className="text-[var(--foreground)]">Callback:</span> <code className="break-all">{codexLoopbackUrl}</code></p>
                     <p><span className="text-[var(--foreground)]">Contoh:</span> <code className="break-all">{codexCallbackExample}</code></p>
                   </div>
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <label className="text-sm text-[var(--foreground)]">Callback URL</label>
+                      <label className="eyebrow">Callback URL</label>
                       <Button size="sm" variant="outline" onClick={handleCodexOAuthPasteCallback} disabled={codexOauthBusy}>Paste</Button>
                     </div>
                     <textarea
@@ -1713,7 +2290,7 @@ ck_xyz789ghi012..."
                     />
                     <div className="flex justify-end">
                       <Button size="sm" onClick={handleCodexOAuthSubmitManual} disabled={codexOauthBusy || !codexCallbackReady}>
-                        {codexOauthBusy ? "Completing OAuth..." : "Submit Callback URL"}
+                        {codexOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Completing OAuth...</>) : "Submit Callback URL"}
                       </Button>
                     </div>
                   </div>
@@ -1727,14 +2304,14 @@ ck_xyz789ghi012..."
           )}
 
           {/* Instant Login mode (Kiro Pro only) */}
-          {addMode === "instant" && (addDialogProvider === "kiro-pro" || addDialogProvider === "codex") && (
+          {addMode === "instant" && addDialogProvider === "codex" && (
             <div className="space-y-4">
               <div>
-                <label className="text-sm text-[var(--foreground)]">Refresh Tokens (satu per baris)</label>
+                <label className="eyebrow">Refresh Tokens (satu per baris)</label>
                 <textarea
                   value={instantTokens}
                   onChange={(e) => setInstantTokens(e.target.value)}
-                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder={"eyJhbGciOiJSUzI1NiIs...\neyJhbGciOiJSUzI1NiIs...\neyJhbGciOiJSUzI1NiIs..."}
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">Paste refresh token per baris. Email otomatis di-extract dari token.</p>
@@ -1749,42 +2326,36 @@ ck_xyz789ghi012..."
           {/* Bulk mode (all providers) */}
           {addMode === "bulk" && (
             <div className="space-y-4">
-              {addDialogProvider === "gitlab-duo" && (
-                <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
-                  <div><strong>Bot otomasi GitLab Duo aktif.</strong> Alurnya: Google OAuth → konfirmasi OTP via Gmail web → form Welcome → Free Trial Singapore → toggle Duo experiment → generate PAT (<code>poolprox3-duo</code>) → simpan ke akun.</div>
-                  <div className="text-[var(--muted-foreground)]">⏱ Estimasi 4–6 menit per akun. <strong>Concurrency=1 disarankan</strong> agar Gmail tidak rate-limit. Pakai akun Gmail tanpa 2FA.</div>
-                </div>
-              )}
               <div>
-                <label className="text-sm text-[var(--foreground)]">Accounts (email|password per baris)</label>
+                <label className="eyebrow">Accounts (email|password per baris)</label>
                 <textarea
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
-                  className="mt-1 w-full h-40 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-sm font-mono text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] resize-none"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder={"email@example.com|password123\nanother@example.com|pass456"}
                 />
               </div>
               <div>
-                <label className="text-sm text-[var(--foreground)]">Browser Engine</label>
-                <select value={bulkBrowserEngine} onChange={(e) => setBulkBrowserEngine(e.target.value)} className="mt-1 w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+                <label className="eyebrow">Browser Engine</label>
+                <Select value={bulkBrowserEngine} onChange={(e) => setBulkBrowserEngine(e.target.value)} className="mt-1">
                   <option value="camoufox">Camoufox (Anti-detect, default)</option>
                   <option value="chromium">Chromium (Playwright)</option>
-                </select>
+                </Select>
               </div>
               <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
+                <label className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
                   <input type="checkbox" checked={bulkHeadless} onChange={(e) => setBulkHeadless(e.target.checked)} className="h-4 w-4 rounded border-[var(--border)]" />
                   Run browser headless
                 </label>
                 <div className="flex items-center gap-2">
-                  <label className="text-sm text-[var(--foreground)]">Concurrent:</label>
-                  <select value={bulkConcurrency} onChange={(e) => setBulkConcurrency(Number(e.target.value))} className="h-8 w-16 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 text-sm text-[var(--foreground)]">
+                  <label className="eyebrow">Concurrent:</label>
+                  <Select value={bulkConcurrency} onChange={(e) => setBulkConcurrency(Number(e.target.value))} className="w-16" aria-label="Concurrent logins">
                     <option value={1}>1</option>
                     <option value={2}>2</option>
                     <option value={3}>3</option>
                     <option value={5}>5</option>
                     <option value={10}>10</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div className="flex justify-end gap-2">
@@ -1797,28 +2368,22 @@ ck_xyz789ghi012..."
           {/* Single mode (all providers) */}
           {addMode === "single" && (
             <div className="space-y-4">
-              {addDialogProvider === "gitlab-duo" && (
-                <div className="rounded-md border border-[var(--success)]/40 bg-[var(--success)]/10 p-3 text-xs text-[var(--foreground)] space-y-1">
-                  <div><strong>Bot otomasi GitLab Duo aktif.</strong> Login Gmail di bawah lalu bot akan: Google OAuth → konfirmasi OTP via Gmail web → form Welcome → Free Trial Singapore → toggle Duo experiment → generate PAT.</div>
-                  <div className="text-[var(--muted-foreground)]">⏱ Estimasi 4–6 menit. Pakai akun Gmail tanpa 2FA. Untuk batch banyak akun, gunakan tab <strong>Bulk</strong>.</div>
-                </div>
-              )}
               <div>
-                <label className="text-sm text-[var(--foreground)]">Email</label>
+                <label className="eyebrow">Email</label>
                 <Input value={addForm.email} onChange={(e) => setAddForm({ ...addForm, email: e.target.value })} placeholder="email@example.com" className="mt-1" />
               </div>
               <div>
-                <label className="text-sm text-[var(--foreground)]">Password</label>
+                <label className="eyebrow">Password</label>
                 <Input value={addForm.password} onChange={(e) => setAddForm({ ...addForm, password: e.target.value })} type="password" placeholder="********" className="mt-1" />
               </div>
               <div>
-                <label className="text-sm text-[var(--foreground)]">Browser Engine</label>
-                <select value={addForm.browserEngine} onChange={(e) => setAddForm({ ...addForm, browserEngine: e.target.value })} className="mt-1 w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+                <label className="eyebrow">Browser Engine</label>
+                <Select value={addForm.browserEngine} onChange={(e) => setAddForm({ ...addForm, browserEngine: e.target.value })} className="mt-1">
                   <option value="camoufox">Camoufox (Anti-detect, default)</option>
                   <option value="chromium">Chromium (Playwright)</option>
-                </select>
+                </Select>
               </div>
-              <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
+              <label className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
                 <input type="checkbox" checked={addForm.headless} onChange={(e) => setAddForm({ ...addForm, headless: e.target.checked })} className="h-4 w-4 rounded border-[var(--border)]" />
                 Run browser headless
               </label>
@@ -1830,6 +2395,22 @@ ck_xyz789ghi012..."
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
+  // Numbers get the big readout; word values (a format name) would look absurd at 20px.
+  const isWord = typeof value === "string" && !/^[\d./]+$/.test(value);
+  return (
+    <div className="px-3 py-3">
+      <div className="eyebrow">{label}</div>
+      <div
+        className={`mt-1.5 truncate font-mono font-semibold leading-none tabular-nums ${isWord ? "text-[13px]" : "text-xl"}`}
+        style={{ color: tone || "var(--foreground)" }}
+      >
+        {value}
+      </div>
     </div>
   );
 }

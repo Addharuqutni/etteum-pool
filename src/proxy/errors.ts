@@ -48,6 +48,40 @@ export function isNonAccountRequestError(error?: string): boolean {
 }
 
 /**
+ * Detect an upstream error embedded in an SSE `data:` payload. Returns the
+ * error message when the payload is an error event, null otherwise. Recognizes
+ * the formats upstreams emit inside an otherwise-200 stream:
+ *   - { type: "upstream_error", error: "message" }
+ *   - { code, statusCodeValue: >= 400, message }
+ *   - OpenAI-style { error: { message } } / { error: "string" }
+ */
+export function getSseError(payload: string): string | null {
+  if (!payload || payload === "[DONE]") return null;
+  let parsed: any;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null; // not JSON — not a detectable error event
+  }
+  if (parsed.type === "upstream_error") {
+    return typeof parsed.error === "string" ? parsed.error : "upstream_error";
+  }
+  if (parsed.statusCodeValue && parsed.statusCodeValue >= 400) {
+    return typeof parsed.message === "string"
+      ? parsed.message
+      : `upstream HTTP ${parsed.statusCodeValue}`;
+  }
+  if (parsed.error && (typeof parsed.error === "object" || typeof parsed.error === "string")) {
+    return typeof parsed.error === "string"
+      ? parsed.error
+      : typeof parsed.error.message === "string"
+        ? parsed.error.message
+        : "upstream error";
+  }
+  return null;
+}
+
+/**
  * Transient errors that are temporary and should not permanently mark an account as errored.
  * These include network issues, timeouts, rate limits, upstream server errors,
  * and bad-request errors that are caused by the request format (not the account).

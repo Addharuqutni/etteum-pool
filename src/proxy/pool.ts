@@ -1,10 +1,11 @@
 import { db } from "../db/index";
 import { accounts, settings } from "../db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 import type { Account } from "../db/schema";
 import { broadcast } from "../ws/index";
 import { config } from "../config";
 import { getProviderForModel, type ProviderName } from "./providers/registry";
+import { notifyAccountStatus } from "../services/alerts";
 
 export type { ProviderName };
 
@@ -51,7 +52,7 @@ class AccountPool {
         const rows = await db.select().from(settings);
         const perProvider = new Map<ProviderName, string>();
         const perByokPrefix = new Map<string, string>();
-        let global = "round_robin";
+        let global = "sequential";
         for (const row of rows) {
           if (!row.value) continue;
           if (row.key === "load_balancing_method") {
@@ -67,16 +68,17 @@ class AccountPool {
           if (match && match[1]) perProvider.set(match[1] as ProviderName, row.value);
         }
         this.lbMethodCache = { global, perProvider, perByokPrefix, expiresAt: now + 10000 };
-      } catch {
+      } catch (err) {
+        console.warn("[Pool] Failed to load load-balancing config, using sequential defaults:", err);
         this.lbMethodCache = {
-          global: "round_robin",
+          global: "sequential",
           perProvider: new Map(),
           perByokPrefix: new Map(),
           expiresAt: now + 10000,
         };
       }
     }
-    return this.lbMethodCache?.perProvider.get(provider) || this.lbMethodCache?.global || "round_robin";
+    return this.lbMethodCache?.perProvider.get(provider) || this.lbMethodCache?.global || "sequential";
   }
 
   async getByokLoadBalancingMethod(prefix: string): Promise<string> {
@@ -84,7 +86,7 @@ class AccountPool {
     return this.lbMethodCache?.perByokPrefix.get(prefix)
       || this.lbMethodCache?.perProvider.get("byok")
       || this.lbMethodCache?.global
-      || "round_robin";
+      || "sequential";
   }
 
   invalidateLoadBalancingCache(): void {
@@ -94,10 +96,21 @@ class AccountPool {
   /**
    * Get the next available account for a provider using configured method.
    */
-  async getNextAccount(provider: ProviderName): Promise<Account | null> {
-    const activeAccounts = await this.getActiveAccounts(provider);
+  async getNextAccount(provider: ProviderName, excludeAccountIds: Set<number> = new Set()): Promise<Account | null> {
+    const activeAccounts = (await this.getActiveAccounts(provider))
+      .filter((account) => !excludeAccountIds.has(account.id));
 
     if (activeAccounts.length === 0) {
+      try {
+        const stats = await this.getStatsByProvider(provider);
+        console.warn(
+          `[Pool] No active accounts for provider "${provider}" ` +
+            `(total: ${stats.total}, active: ${stats.active}, exhausted: ${stats.exhausted}, ` +
+            `error: ${stats.error}, disabled: ${stats.disabled})`
+        );
+      } catch {
+        console.warn(`[Pool] No active accounts for provider "${provider}" (stats unavailable)`);
+      }
       return null;
     }
 
@@ -170,125 +183,6 @@ class AccountPool {
     return Number(account?.quotaRemaining || 0);
   }
 
-  /**
-   * Decrement the Qoder Free counter (mirror of /activity qmodel_latest).
-   * Used for requests routed to qd-Qwen3.7-Max (the only Free-promo model).
-   * Returns new freeRemaining (clamped at 0).
-   */
-  async decrementFreeQuota(accountId: number, creditsUsed: number): Promise<number> {
-    if (!Number.isFinite(creditsUsed) || creditsUsed <= 0) {
-      const [account] = await db
-        .select({ freeRemaining: accounts.freeRemaining })
-        .from(accounts)
-        .where(eq(accounts.id, accountId))
-        .limit(1);
-      return Number(account?.freeRemaining || 0);
-    }
-
-    const [account] = await db
-      .update(accounts)
-      .set({
-        freeRemaining: sql`MAX(0, COALESCE(${accounts.freeRemaining}, 0) - ${creditsUsed})`,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId))
-      .returning({ freeRemaining: accounts.freeRemaining });
-
-    return Number(account?.freeRemaining || 0);
-  }
-
-  /**
-   * Mark a Qoder account `exhausted` ONLY if both counters are depleted.
-   *
-   * Rules:
-   *   - Free out: freeLimit > 0 AND freeRemaining <= 0
-   *   - All out:  quotaLimit > 0 AND quotaRemaining <= 0
-   *   - All not-applicable: quotaLimit <= 0 (Qoder /quota/usage sentinel "no data")
-   *   - exhausted ⇔ Free out AND (All out OR All not-applicable)
-   *     AND (Free not-applicable OR Free out) — i.e. at least one was applicable and is out
-   *
-   * If neither Free nor All has a positive limit at all, treat as not-applicable
-   * (don't mark exhausted from this path — let the probe/warmup decide).
-   */
-  async markExhaustedIfFullyDepleted(accountId: number): Promise<void> {
-    const [a] = await db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
-    if (!a) return;
-
-    const freeLim = Number(a.freeLimit ?? 0);
-    const freeRem = Number(a.freeRemaining ?? 0);
-    const allLim = Number(a.quotaLimit ?? 0);
-    const allRem = Number(a.quotaRemaining ?? 0);
-
-    const freeApplicable = freeLim > 0;
-    const allApplicable = allLim > 0;
-    const freeOut = freeApplicable && freeRem <= 0;
-    const allOut = allApplicable && allRem <= 0;
-
-    // Neither bucket applicable — nothing to decide here.
-    if (!freeApplicable && !allApplicable) return;
-
-    // Both applicable: need both depleted.
-    if (freeApplicable && allApplicable) {
-      if (freeOut && allOut) await this.markExhausted(accountId);
-      return;
-    }
-
-    // Only one applicable: that one being out is sufficient.
-    if (freeApplicable && freeOut) await this.markExhausted(accountId);
-    else if (allApplicable && allOut) await this.markExhausted(accountId);
-  }
-
-  /**
-   * Check and reset daily quota for Qoder accounts.
-   * - If quotaLimit === 0: initialize with dailyLimit
-   * - If quotaResetAt has passed: reset quotaRemaining to dailyLimit, set quotaResetAt to next midnight
-   * - Reactivates exhausted accounts after reset (unless server-side rate limited)
-   */
-  async checkAndResetDailyQuota(accountId: number, dailyLimit: number): Promise<number> {
-    const [account] = await db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
-    if (!account) return 0;
-
-    const now = new Date();
-    const resetAt = account.quotaResetAt ? new Date(account.quotaResetAt) : null;
-    const currentLimit = Number(account.quotaLimit || 0);
-
-    // Check if account is server-side rate limited (exhausted within last 24 hours)
-    const updatedAt = account.updatedAt ? new Date(account.updatedAt) : null;
-    const hoursSinceUpdate = updatedAt ? (now.getTime() - updatedAt.getTime()) / (1000 * 60 * 60) : Infinity;
-    const isServerRateLimited = account.status === "exhausted" && hoursSinceUpdate < 24;
-
-    // Initialize or reset if:
-    // 1. quotaLimit === 0 (first time setup)
-    // 2. quotaResetAt has passed (daily reset) AND not server-side rate limited
-    if (currentLimit === 0 || (!isServerRateLimited && (!resetAt || now >= resetAt))) {
-      // Set next reset to tomorrow midnight
-      const nextReset = new Date(now);
-      nextReset.setDate(nextReset.getDate() + 1);
-      nextReset.setHours(0, 0, 0, 0);
-
-      const [updated] = await db.update(accounts)
-        .set({
-          quotaLimit: dailyLimit,
-          quotaRemaining: dailyLimit,
-          quotaResetAt: nextReset,
-          status: "active", // Reactivate if was exhausted
-          updatedAt: now,
-        })
-        .where(eq(accounts.id, accountId))
-        .returning({ quotaRemaining: accounts.quotaRemaining });
-
-      this.invalidate(account.provider as ProviderName);
-      broadcast({
-        type: "account_status",
-        data: { id: accountId, status: "active", provider: account.provider, quotaReset: true },
-      });
-
-      return Number(updated?.quotaRemaining || dailyLimit);
-    }
-
-    return Number(account.quotaRemaining || 0);
-  }
-
   private async getActiveAccounts(provider: ProviderName): Promise<Account[]> {
     const ttlMs = Math.max(0, config.accountCacheTtlMs);
     if (ttlMs === 0) return this.fetchActiveAccounts(provider);
@@ -322,16 +216,22 @@ class AccountPool {
   }
 
   private async fetchActiveAccounts(provider: ProviderName): Promise<Account[]> {
-    return db
-      .select()
-      .from(accounts)
-      .where(
-        and(
-          eq(accounts.provider, provider),
-          eq(accounts.status, "active"),
-          eq(accounts.enabled, true),
+    try {
+      return await db
+        .select()
+        .from(accounts)
+        .where(
+          and(
+            eq(accounts.provider, provider),
+            eq(accounts.status, "active"),
+            eq(accounts.enabled, true),
+          )
         )
-      );
+        .orderBy(asc(accounts.id));
+    } catch (err) {
+      console.error(`[Pool] Failed to fetch active accounts for provider "${provider}":`, err);
+      throw err;
+    }
   }
 
   /**
@@ -343,7 +243,10 @@ class AccountPool {
   ): Promise<{ account: Account; provider: ProviderName } | null> {
     // Determine which provider handles this model
     const provider = this.getProviderForModel(model);
-    if (!provider) return null;
+    if (!provider) {
+      console.warn(`[Pool] No provider owns model "${model}"`);
+      return null;
+    }
 
     // BYOK requires special handling - find account by prefix
     if (provider === "byok") {
@@ -355,7 +258,13 @@ class AccountPool {
         loadBalancingMethod: prefix ? await this.getByokLoadBalancingMethod(prefix) : await this.getLoadBalancingMethod("byok"),
         getInFlightCount: (accountId) => this.getInFlightCount(accountId),
       });
-      if (!account) return null;
+      if (!account) {
+        console.warn(
+          `[Pool] No BYOK account available for model "${model}" ` +
+            `(prefix: ${prefix || "not found"})`
+        );
+        return null;
+      }
       return { account, provider: "byok" };
     }
 
@@ -377,35 +286,44 @@ class AccountPool {
    * Mark an account as used (update last_used_at)
    */
   async markUsed(accountId: number): Promise<void> {
-    await db
-      .update(accounts)
-      .set({
-        lastUsedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
+    try {
+      await db
+        .update(accounts)
+        .set({
+          lastUsedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId));
+    } catch (err) {
+      console.error(`[Pool] Failed to mark account ${accountId} as used:`, err);
+    }
   }
 
   /**
    * Mark an account as exhausted (also zeroes out quota remaining)
    */
   async markExhausted(accountId: number): Promise<void> {
-    const [account] = await db
-      .update(accounts)
-      .set({
-        status: "exhausted",
-        quotaRemaining: 0,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId))
-      .returning();
+    try {
+      const [account] = await db
+        .update(accounts)
+        .set({
+          status: "exhausted",
+          quotaRemaining: 0,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId))
+        .returning();
 
-    if (account) {
-      this.invalidate(account.provider as ProviderName);
-      broadcast({
-        type: "account_status",
-        data: { id: accountId, status: "exhausted", provider: account.provider },
-      });
+      if (account) {
+        this.invalidate(account.provider as ProviderName);
+        broadcast({
+          type: "account_status",
+          data: { id: accountId, status: "exhausted", provider: account.provider },
+        });
+        void notifyAccountStatus(account);
+      }
+    } catch (err) {
+      console.error(`[Pool] Failed to mark account ${accountId} as exhausted:`, err);
     }
   }
 
@@ -413,54 +331,68 @@ class AccountPool {
    * Mark an account as errored
    */
   async markError(accountId: number, errorMessage: string): Promise<void> {
-    const [account] = await db
-      .update(accounts)
-      .set({
-        status: "error",
-        errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId))
-      .returning();
+    try {
+      const [account] = await db
+        .update(accounts)
+        .set({
+          status: "error",
+          errorMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId))
+        .returning();
 
-    if (account) this.invalidate(account.provider as ProviderName);
-
-    broadcast({
-      type: "account_status",
-      data: { id: accountId, status: "error", error: errorMessage },
-    });
+      if (account) {
+        this.invalidate(account.provider as ProviderName);
+        broadcast({
+          type: "account_status",
+          data: { id: accountId, status: "error", error: errorMessage },
+        });
+        void notifyAccountStatus(account);
+      }
+    } catch (err) {
+      console.error(`[Pool] Failed to mark account ${accountId} as error (${errorMessage}):`, err);
+    }
   }
 
   async markTransientFailure(accountId: number, errorMessage: string): Promise<void> {
-    const [account] = await db
-      .update(accounts)
-      .set({
-        status: "active",
-        errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId))
-      .returning();
+    try {
+      const [account] = await db
+        .update(accounts)
+        .set({
+          status: "active",
+          errorMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId))
+        .returning();
 
-    if (account) this.invalidate(account.provider as ProviderName);
+      if (account) this.invalidate(account.provider as ProviderName);
 
-    broadcast({
-      type: "account_status",
-      data: { id: accountId, status: "active", warning: errorMessage },
-    });
+      broadcast({
+        type: "account_status",
+        data: { id: accountId, status: "active", warning: errorMessage },
+      });
+    } catch (err) {
+      console.error(`[Pool] Failed to mark transient failure on account ${accountId} (${errorMessage}):`, err);
+    }
   }
 
   /**
    * Update account tokens (stored as jsonb)
    */
   async updateTokens(accountId: number, tokens: unknown): Promise<void> {
-    await db
-      .update(accounts)
-      .set({
-        tokens,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, accountId));
+    try {
+      await db
+        .update(accounts)
+        .set({
+          tokens,
+          updatedAt: new Date(),
+        })
+        .where(eq(accounts.id, accountId));
+    } catch (err) {
+      console.error(`[Pool] Failed to update tokens for account ${accountId}:`, err);
+    }
   }
 
   /**
@@ -561,6 +493,40 @@ class AccountPool {
       pending: totalRow?.pending || 0,
       disabled: totalRow?.disabled || 0,
       byProvider,
+    };
+  }
+
+  /**
+   * Get per-provider account statistics (used for descriptive error messages
+   * when no active account is available).
+   */
+  async getStatsByProvider(provider: ProviderName): Promise<{
+    total: number;
+    active: number;
+    exhausted: number;
+    error: number;
+    pending: number;
+    disabled: number;
+  }> {
+    const [row] = await db
+      .select({
+        total: sql<number>`count(*)`,
+        active: sql<number>`SUM(CASE WHEN status = 'active' AND enabled = 1 THEN 1 ELSE 0 END)`,
+        exhausted: sql<number>`SUM(CASE WHEN status = 'exhausted' THEN 1 ELSE 0 END)`,
+        error: sql<number>`SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END)`,
+        pending: sql<number>`SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END)`,
+        disabled: sql<number>`SUM(CASE WHEN enabled = 0 THEN 1 ELSE 0 END)`,
+      })
+      .from(accounts)
+      .where(eq(accounts.provider, provider));
+
+    return {
+      total: row?.total || 0,
+      active: row?.active || 0,
+      exhausted: row?.exhausted || 0,
+      error: row?.error || 0,
+      pending: row?.pending || 0,
+      disabled: row?.disabled || 0,
     };
   }
 }

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Search, Trash2, RefreshCw, RotateCcw, ExternalLink, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle2, XCircle } from "lucide-react";
+import PageHeader from "@/components/layout/PageHeader";
+import { ArrowLeft, Search, Trash2, RefreshCw, RotateCcw, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle2, XCircle } from "lucide-react";
 import { formatDateTimeID } from "@/lib/utils";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
 import { useWsEvent } from "@/hooks/useWebSocket";
@@ -14,14 +15,13 @@ import {
   fetchAccounts,
   loginAccount,
   loginAccounts,
-  openPanel,
   toggleAccountEnabled,
   toggleAllAccounts,
   warmupAccount,
   warmupAllAccounts,
 } from "@/lib/api";
 
-type Provider = "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder";
+type Provider = "codebuddy" | "codebuddy-china" | "canva" | "codex" | "grok-cli" | "claude";
 type Status = "active" | "exhausted" | "error" | "pending" | "disabled";
 
 interface CodexQuotaWindow {
@@ -56,45 +56,7 @@ interface Account {
     codex_quota?: CodexQuotaMetadata;
     overage?: { enabled: boolean; capable: boolean; used: number; cap: number; remaining: number } | null;
     inferenceProbe?: string;
-    activityQuota?: QoderActivityQuota | null;
-    activityQuotaError?: string | null;
-    serverQuota?: QoderServerQuota | null;
   } | null;
-}
-
-// Qoder /quota/usage snapshot persisted by warmup. Account-wide credit pool.
-interface QoderServerQuota {
-  limit?: number;
-  remaining?: number;
-  used?: number;
-  resetAt?: string | null;
-  source?: string | null;
-  reportedExhausted?: boolean;
-  reportedAt?: string;
-}
-
-// Qoder /activity endpoint shape — per-model promo buckets.
-// Mirrors `QoderActivity` in src/proxy/providers/qoder.ts.
-interface QoderActivityBucket {
-  type?: string;
-  activityId?: string;
-  modelName?: string;
-  modelKeys?: string[];           // upstream keys (e.g. ["qmodel_latest"])
-  limit?: number;
-  used?: number;
-  remaining?: number;
-  resetAt?: number;               // unix ms
-  resetStrategy?: string;
-  eligible?: boolean;
-  description?: string;
-  statusText?: string;
-}
-
-interface QoderActivityQuota {
-  activities?: QoderActivityBucket[];
-  queryAt?: number;
-  fetchedAt?: string;
-  [key: string]: unknown;
 }
 
 const statusVariants: Record<string, "success" | "warning" | "error" | "secondary"> = {
@@ -108,6 +70,8 @@ const statusVariants: Record<string, "success" | "warning" | "error" | "secondar
 function labelProvider(provider: string) {
   if (provider === "codebuddy") return "CodeBuddy";
   if (provider === "codebuddy-china") return "CodeBuddy CN";
+  if (provider === "grok-cli") return "Grok CLI";
+  if (provider === "claude") return "Claude";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -164,95 +128,6 @@ function CodexQuotaCell({ codex, fallbackRemaining, fallbackLimit }: { codex?: C
       {codex.plan_type && <div className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">Plan: {codex.plan_type}{codex.rate_limited && <span className="ml-2 text-[var(--error)]">RATE LIMITED</span>}</div>}
       {renderBar("Session", codex.primary)}
       {renderBar("Weekly", codex.secondary)}
-    </div>
-  );
-}
-
-function findQoderActivityBucket(activity: QoderActivityQuota | null | undefined, modelKey: string): QoderActivityBucket | null {
-  if (!activity || !Array.isArray(activity.activities)) return null;
-  return activity.activities.find((b) => Array.isArray(b?.modelKeys) && b.modelKeys.includes(modelKey)) ?? null;
-}
-
-function secondsUntil(unixMs?: number): number | null {
-  if (!unixMs || !Number.isFinite(unixMs)) return null;
-  const diff = Math.floor((unixMs - Date.now()) / 1000);
-  return diff > 0 ? diff : null;
-}
-
-function QoderQuotaCell({
-  account,
-}: {
-  account: Account;
-}) {
-  const activity = account.metadata?.activityQuota ?? null;
-  const activityErr = account.metadata?.activityQuotaError ?? null;
-  const bucket = findQoderActivityBucket(activity, "qmodel_latest");
-
-  // ---- Free bar (top): live DB columns are source of truth — they're
-  // overridden by warmup every cycle from /activity bucket qmodel_latest,
-  // and decremented per-request when a Free-promo model is used. ----
-  const freeLimit = Number(account.freeLimit ?? bucket?.limit ?? 0);
-  const freeRemaining = Number(account.freeRemaining ?? bucket?.remaining ?? 0);
-  const freeHasData = freeLimit > 0;
-  const freePct = freeHasData ? Math.max(0, Math.min(100, (freeRemaining / freeLimit) * 100)) : 0;
-  const freeTone = freePct <= 10 ? "bg-[var(--error)]" : freePct <= 40 ? "bg-[var(--warning)]" : "bg-[var(--success)]";
-  const freeResetSec = secondsUntil(bucket?.resetAt);
-  const freeReset = freeResetSec ? formatResetIn(freeResetSec) : null;
-
-  // ---- All bar (bottom): account-wide credit from /quota/usage (metadata.serverQuota) ----
-  // NOTE: account.quotaLimit/Remaining is owned by the custom-credit (200/day) system
-  // for Qoder, not by warmup. The authoritative server credit lives in metadata.serverQuota.
-  const server = account.metadata?.serverQuota ?? null;
-  const allLimit = Number(server?.limit ?? 0);
-  const allRemaining = Number(server?.remaining ?? 0);
-  const allHasData = server != null && allLimit > 0;
-  const allPct = allHasData ? Math.max(0, Math.min(100, (allRemaining / allLimit) * 100)) : 0;
-  const allTone = allPct <= 10 ? "bg-[var(--error)]" : allPct <= 40 ? "bg-[var(--warning)]" : "bg-[var(--success)]";
-  const allReportedExhausted = server?.reportedExhausted === true;
-
-  return (
-    <div className="space-y-1.5 min-w-[200px]">
-      {/* Free (promo) */}
-      <div className="space-y-0.5">
-        <div className="flex items-center justify-between text-[10px] text-[var(--muted-foreground)]">
-          <span className="font-medium">
-            Free
-            {bucket?.eligible === false && <span className="ml-1 text-[var(--warning)]">(ineligible)</span>}
-          </span>
-          <span>
-            {freeHasData
-              ? <>{freeRemaining}/{freeLimit}{freeReset ? ` · reset ${freeReset}` : ""}</>
-              : activityErr
-                ? <span className="text-[var(--error)]" title={activityErr}>err</span>
-                : <span className="opacity-60">n/a</span>}
-          </span>
-        </div>
-        <div className="h-1.5 w-full rounded-full bg-[var(--secondary)] overflow-hidden">
-          {freeHasData && <div className={`h-full ${freeTone}`} style={{ width: `${freePct}%` }} />}
-        </div>
-      </div>
-      {/* All (server credit from /quota/usage) */}
-      <div className="space-y-0.5">
-        <div className="flex items-center justify-between text-[10px] text-[var(--muted-foreground)]">
-          <span className="font-medium">
-            All
-            {allReportedExhausted && <span className="ml-1 text-[var(--warning)]" title="Server reported exhausted (probe may have overridden)">(rpt 0)</span>}
-          </span>
-          <span>
-            {allHasData
-              ? <>{formatCredit(allRemaining)}/{formatCredit(allLimit)}</>
-              : <span className="opacity-60">n/a</span>}
-            {account.metadata?.overage?.enabled && account.metadata.overage.remaining > 0 && (
-              <span className="ml-1 inline-block px-1 py-0 rounded text-[9px] bg-[var(--success)] text-white">
-                PAYG: {Math.round(account.metadata.overage.used)}
-              </span>
-            )}
-          </span>
-        </div>
-        <div className="h-1.5 w-full rounded-full bg-[var(--secondary)] overflow-hidden">
-          {allHasData && <div className={`h-full ${allTone}`} style={{ width: `${allPct}%` }} />}
-        </div>
-      </div>
     </div>
   );
 }
@@ -323,10 +198,6 @@ export default function AccountList() {
 
   async function handleLogin(id: number) {
     try { await loginAccount(id); showSuccess(`Login queued #${id}`); await load(); } catch (err) { showError(err); }
-  }
-
-  async function handleOpenPanel(id: number) {
-    try { await openPanel(id); showSuccess(`Panel opened #${id}`); } catch (err) { showError(err); }
   }
 
   async function handleRetryErrors() {
@@ -483,42 +354,50 @@ export default function AccountList() {
   const disabledCount = accounts.filter((a) => a.enabled === false).length;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")}>
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-[var(--foreground)]">{labelProvider(provider || "")}</h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">{accounts.length} accounts</p>
-          </div>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleWarmupAll}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Warmup All
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
-            <RotateCcw className="w-4 h-4 mr-2" /> Retry Errors ({errorCount})
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
-            <CheckCircle2 className="w-4 h-4 mr-2 text-[var(--success)]" /> Enable All ({disabledCount})
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => handleToggleAll(false)} disabled={enabledCount === 0}>
-            <XCircle className="w-4 h-4 mr-2 text-[var(--error)]" /> Disable All ({enabledCount})
-          </Button>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title={labelProvider(provider || "")}
+        meta={
+          <>
+            <span>{accounts.length} accounts</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span className={enabledCount > 0 ? "text-[var(--success)]" : undefined}>{enabledCount} enabled</span>
+            {errorCount > 0 && (
+              <>
+                <span aria-hidden className="text-[var(--border)]">·</span>
+                <span className="text-[var(--error)]">{errorCount} error</span>
+              </>
+            )}
+          </>
+        }
+        actions={
+          <>
+            <Button variant="ghost" size="icon" onClick={() => navigate("/accounts")} aria-label="Back to providers">
+              <ArrowLeft className="w-3.5 h-3.5" />
+            </Button>
+            <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleWarmupAll}>
+              <RefreshCw className="w-3.5 h-3.5" /> Warmup all
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleRetryErrors} disabled={errorCount === 0}>
+              <RotateCcw className="w-3.5 h-3.5" /> Retry errors ({errorCount})
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
+              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" /> Enable ({disabledCount})
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => handleToggleAll(false)} disabled={enabledCount === 0}>
+              <XCircle className="w-3.5 h-3.5 text-[var(--error)]" /> Disable ({enabledCount})
+            </Button>
+          </>
+        }
+      />
 
-      {/* Messages */}
       {(message || error) && (
-        <div className={`rounded-md p-3 text-sm ${message ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--error)]/10 text-[var(--error)]"}`}>
+        <p className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}>
           {message || error}
-        </div>
+        </p>
       )}
 
       {/* Search & Filter */}
@@ -567,127 +446,126 @@ export default function AccountList() {
         </div>
       )}
 
-      {/* Table */}
-      <Card className="border-[var(--border)]">
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[var(--border)]">
-                  <th className="w-10 p-4">
+      {/* Primary surface: the account table */}
+      <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse font-mono text-[12px]">
+            <thead className="sticky-head">
+              <tr>
+                <th className="w-10 px-4 py-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all visible accounts"
+                    className="h-4 w-4 rounded border-[var(--border)] cursor-pointer accent-[var(--primary)]"
+                    checked={allVisibleSelected}
+                    ref={(el) => { if (el) el.indeterminate = someVisibleSelected; }}
+                    onChange={toggleSelectAllVisible}
+                  />
+                </th>
+                <th className="eyebrow px-4 py-2 text-left cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("email")}>
+                  <span className="inline-flex items-center">Email<SortIcon column="email" /></span>
+                </th>
+                <th className="eyebrow px-4 py-2 text-left cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("status")}>
+                  <span className="inline-flex items-center">Status<SortIcon column="status" /></span>
+                </th>
+                <th className="eyebrow px-4 py-2 text-left cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("enabled")}>
+                  <span className="inline-flex items-center">Enabled<SortIcon column="enabled" /></span>
+                </th>
+                <th className="eyebrow px-4 py-2 text-left cursor-pointer select-none hover:text-[var(--foreground)] hidden sm:table-cell" onClick={() => handleSort("credit")}>
+                  <span className="inline-flex items-center">Credit<SortIcon column="credit" /></span>
+                </th>
+                <th className="eyebrow px-4 py-2 text-left cursor-pointer select-none hover:text-[var(--foreground)] hidden md:table-cell" onClick={() => handleSort("lastLogin")}>
+                  <span className="inline-flex items-center">Last Login<SortIcon column="lastLogin" /></span>
+                </th>
+                <th className="eyebrow px-4 py-2 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice((page - 1) * perPage, page * perPage).map((account) => {
+                const isEnabled = account.enabled !== false;
+                return (
+                <tr key={account.id} className={`border-t border-[var(--hairline)] hover:bg-[var(--secondary)]/50 transition-colors duration-150 ${selectedIds.has(account.id) ? "bg-[var(--primary)]/[0.04]" : ""} ${isEnabled ? "" : "opacity-50"}`}>
+                  <td className="px-4 py-2">
                     <input
                       type="checkbox"
-                      aria-label="Select all visible accounts"
+                      aria-label={`Select ${account.email}`}
                       className="h-4 w-4 rounded border-[var(--border)] cursor-pointer accent-[var(--primary)]"
-                      checked={allVisibleSelected}
-                      ref={(el) => { if (el) el.indeterminate = someVisibleSelected; }}
-                      onChange={toggleSelectAllVisible}
+                      checked={selectedIds.has(account.id)}
+                      onChange={() => toggleSelect(account.id)}
                     />
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("email")}>
-                    <span className="inline-flex items-center">Email<SortIcon column="email" /></span>
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("status")}>
-                    <span className="inline-flex items-center">Status<SortIcon column="status" /></span>
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)]" onClick={() => handleSort("enabled")}>
-                    <span className="inline-flex items-center">Enabled<SortIcon column="enabled" /></span>
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden sm:table-cell" onClick={() => handleSort("credit")}>
-                    <span className="inline-flex items-center">Credit<SortIcon column="credit" /></span>
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4 cursor-pointer select-none hover:text-[var(--foreground)] hidden md:table-cell" onClick={() => handleSort("lastLogin")}>
-                    <span className="inline-flex items-center">Last Login<SortIcon column="lastLogin" /></span>
-                  </th>
-                  <th className="text-left text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide p-4">Actions</th>
+                  </td>
+                  <td className="px-4 py-2 text-[var(--foreground)]">
+                    <div>{account.email}</div>
+                    {account.errorMessage && <div className="mt-1 line-clamp-1 text-[11px] text-[var(--error)]" title={account.errorMessage}>{account.errorMessage}</div>}
+                  </td>
+                  <td className="px-4 py-2"><Badge variant={statusVariants[account.status]}>{account.status}</Badge></td>
+                  <td className="px-4 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isEnabled}
+                      onClick={() => handleToggle(account.id, isEnabled)}
+                      title={isEnabled ? "Klik untuk non-aktifkan" : "Klik untuk aktifkan"}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--ring)] focus:ring-offset-1 focus:ring-offset-[var(--background)] ${isEnabled ? "bg-[var(--success)]" : "bg-[var(--secondary)]"}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? "translate-x-4" : "translate-x-0.5"}`} />
+                    </button>
+                  </td>
+                  <td className="hidden px-4 py-2 tabular-nums text-[var(--muted-foreground)] sm:table-cell">
+                    {account.provider === "codex"
+                      ? <CodexQuotaCell codex={account.metadata?.codex_quota} fallbackRemaining={account.quotaRemaining} fallbackLimit={account.quotaLimit} />
+                      : <span className="flex items-center gap-1.5">
+                          {formatCredit(account.quotaRemaining)}/{formatCredit(account.quotaLimit)}
+                          {account.metadata?.overage?.enabled && account.metadata.overage.remaining > 0 && (
+                            <Badge variant="success" className="text-[10px] px-1 py-0">
+                              PAYG: {Math.round(account.metadata.overage.used)}
+                            </Badge>
+                          )}
+                        </span>}
+                  </td>
+                  <td className="hidden px-4 py-2 text-[11px] tabular-nums text-[var(--muted-foreground)] md:table-cell">{formatDate(account.lastLoginAt || account.lastUsedAt)}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => handleWarmup(account.id)} title="WarmUp">
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--warning)]" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleDelete(account.id)} title="Delete" className="hover:text-[var(--destructive)]">
+                        <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                      </Button>
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filtered.slice((page - 1) * perPage, page * perPage).map((account) => {
-                  const isEnabled = account.enabled !== false;
-                  return (
-                  <tr key={account.id} className={`border-b border-[var(--border)] last:border-0 hover:bg-[var(--secondary)]/50 ${selectedIds.has(account.id) ? "bg-[var(--primary)]/[0.04]" : ""} ${isEnabled ? "" : "opacity-50"}`}>
-                    <td className="p-4">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${account.email}`}
-                        className="h-4 w-4 rounded border-[var(--border)] cursor-pointer accent-[var(--primary)]"
-                        checked={selectedIds.has(account.id)}
-                        onChange={() => toggleSelect(account.id)}
-                      />
-                    </td>
-                    <td className="p-4 text-sm text-[var(--foreground)]">
-                      <div>{account.email}</div>
-                      {account.errorMessage && <div className="text-xs text-[var(--error)] mt-1 line-clamp-1" title={account.errorMessage}>{account.errorMessage}</div>}
-                    </td>
-                    <td className="p-4"><Badge variant={statusVariants[account.status]}>{account.status}</Badge></td>
-                    <td className="p-4">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={isEnabled}
-                        onClick={() => handleToggle(account.id, isEnabled)}
-                        title={isEnabled ? "Klik untuk non-aktifkan" : "Klik untuk aktifkan"}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--ring)] focus:ring-offset-1 focus:ring-offset-[var(--background)] ${isEnabled ? "bg-[var(--success)]" : "bg-[var(--secondary)]"}`}
-                      >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? "translate-x-4" : "translate-x-0.5"}`} />
-                      </button>
-                    </td>
-                    <td className="p-4 text-sm text-[var(--muted-foreground)] hidden sm:table-cell">
-                      {account.provider === "codex"
-                        ? <CodexQuotaCell codex={account.metadata?.codex_quota} fallbackRemaining={account.quotaRemaining} fallbackLimit={account.quotaLimit} />
-                        : account.provider === "qoder"
-                        ? <QoderQuotaCell account={account} />
-                        : <span className="flex items-center gap-1.5">
-                            {formatCredit(account.quotaRemaining)}/{formatCredit(account.quotaLimit)}
-                            {account.metadata?.overage?.enabled && account.metadata.overage.remaining > 0 && (
-                              <Badge variant="success" className="text-[10px] px-1 py-0">
-                                PAYG: {Math.round(account.metadata.overage.used)}
-                              </Badge>
-                            )}
-                          </span>}
-                    </td>
-                    <td className="p-4 text-xs text-[var(--muted-foreground)] hidden md:table-cell">{formatDate(account.lastLoginAt || account.lastUsedAt)}</td>
-                    <td className="p-4">
-                      <div className="flex gap-1">
-                        {(account.provider.startsWith("kiro") || account.provider === "qoder") && (
-                          <Button variant="ghost" size="icon" onClick={() => handleOpenPanel(account.id)} title={`Open ${account.provider === "qoder" ? "Qoder" : "Kiro"} Panel`}>
-                            <ExternalLink className="w-4 h-4 text-[var(--info)]" />
-                          </Button>
-                        )}
-                        <Button variant="ghost" size="icon" onClick={() => handleWarmup(account.id)} title="WarmUp">
-                          <RefreshCw className="w-4 h-4 text-[var(--warning)]" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
-                          <RotateCcw className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(account.id)} title="Delete">
-                          <Trash2 className="w-4 h-4 text-[var(--error)]" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                  );
-                })}
-                {!loading && filtered.length === 0 && (
-                  <tr><td colSpan={7} className="p-8 text-center text-sm text-[var(--muted-foreground)]">No accounts found</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          {filtered.length > perPage && (
-            <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
-              <p className="text-xs text-[var(--muted-foreground)]">
-                {(page - 1) * perPage + 1}–{Math.min(page * perPage, filtered.length)} of {filtered.length}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-                <span className="text-xs text-[var(--muted-foreground)]">{page}/{Math.ceil(filtered.length / perPage)}</span>
-                <Button variant="outline" size="sm" disabled={page >= Math.ceil(filtered.length / perPage)} onClick={() => setPage(page + 1)}>Next</Button>
-              </div>
+                );
+              })}
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12">
+                    <div className="flex flex-col items-center justify-center gap-1.5 text-center text-[var(--muted-foreground)]">
+                      <Search className="h-6 w-6 opacity-40" />
+                      <p className="font-mono text-[12px]">No accounts found</p>
+                      <p className="font-mono text-[11px] opacity-80">Try adjusting your search or status filter.</p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {filtered.length > perPage && (
+          <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
+            <p className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              {(page - 1) * perPage + 1}–{Math.min(page * perPage, filtered.length)} of {filtered.length}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(filtered.length / perPage)}</span>
+              <Button variant="outline" size="sm" disabled={page >= Math.ceil(filtered.length / perPage)} onClick={() => setPage(page + 1)}>Next</Button>
             </div>
-          )}
-        </CardContent>
+          </div>
+        )}
       </Card>
     </div>
   );

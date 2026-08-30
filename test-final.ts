@@ -13,7 +13,7 @@ async function testAll() {
   console.log("Test 2: Model routing");
   console.log("--------------------");
   const byokModels = ["genflow-gpt-5.4", "genflow-claude-opus-4.6"];
-  const otherModels = ["kiro-gpt-4", "openai-gpt-4o"];
+  const otherModels = ["cb-sonnet-4.6", "openai-gpt-4o"];
   
   let allPassed = true;
   for (const model of byokModels) {

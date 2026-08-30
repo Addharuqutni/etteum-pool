@@ -37,7 +37,7 @@ def _ws_debug(message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Google OAuth helpers (shared with kiro/codebuddy)
+# Google OAuth helpers (shared with codebuddy)
 # ---------------------------------------------------------------------------
 
 

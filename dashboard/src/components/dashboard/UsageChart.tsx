@@ -32,58 +32,88 @@ export default function UsageChart({ data = defaultData, colorsByModel = {} }: U
   const colors = Object.fromEntries(models.map((model, index) => [model, colorsByModel[model] || modelColor(model, index)]));
 
   if (data.length === 0) {
+    // One line, no illustration. The operator knows what an empty chart means.
     return (
-      <div className="h-[300px] w-full flex items-center justify-center rounded-lg bg-[var(--secondary)] text-sm text-[var(--muted-foreground)]">
-        No usage data yet
+      <div className="flex h-[260px] w-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+        No traffic in this range
       </div>
     );
   }
 
   return (
-    <div className="h-[300px] w-full">
+    <div className="h-[260px] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
           <defs>
             {models.map((model) => (
               <linearGradient key={model} id={`gradient-${model}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={colors[model]} stopOpacity={0.3} />
-                <stop offset="95%" stopColor={colors[model]} stopOpacity={0} />
+                <stop offset="0%" stopColor={colors[model]} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={colors[model]} stopOpacity={0} />
               </linearGradient>
             ))}
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2d3748" />
+          {/* Horizontal rules only — vertical gridlines fight the area shapes */}
+          <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
           <XAxis
             dataKey="label"
-            stroke="#6b7280"
-            fontSize={11}
+            stroke="var(--chart-axis)"
+            fontSize={10}
             tickLine={false}
             axisLine={false}
+            tickMargin={8}
+            style={{ fontFamily: "var(--font-mono)" }}
           />
           <YAxis
-            stroke="#6b7280"
-            fontSize={11}
+            stroke="var(--chart-axis)"
+            fontSize={10}
             tickLine={false}
             axisLine={false}
+            width={44}
             tickFormatter={(value) => formatTokenCount(Number(value))}
+            style={{ fontFamily: "var(--font-mono)" }}
           />
           <Tooltip
+            cursor={{ stroke: "var(--chart-axis)", strokeDasharray: "2 3" }}
             content={({ active, payload, label }) => {
               if (!active || !payload?.length) return null;
               const sorted = [...payload].sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
               return (
-                <div style={{ backgroundColor: "#1a1d27", border: "1px solid #2d3748", borderRadius: "8px", padding: "8px 12px" }}>
-                  <p style={{ color: "#9ca3af", marginBottom: 4, fontSize: 12 }}>{label}</p>
-                  {sorted.map((entry) => (
-                    <p key={entry.name} style={{ color: entry.color, fontSize: 12, margin: "2px 0" }}>
-                      {entry.name} : {formatTokenCount(Number(entry.value || 0))}
-                    </p>
-                  ))}
+                <div className="rounded-md border border-[var(--border)] bg-[var(--popover)] px-2.5 py-2 shadow-[var(--shadow-raised)]">
+                  <div className="eyebrow mb-1.5">{label}</div>
+                  <table className="font-mono text-[11px]">
+                    <tbody>
+                      {sorted.map((entry) => (
+                        <tr key={entry.name}>
+                          <td className="pr-3">
+                            <span className="flex items-center gap-1.5">
+                              <span
+                                aria-hidden
+                                className="h-2 w-[3px] rounded-full"
+                                style={{ backgroundColor: entry.color }}
+                              />
+                              <span className="text-[var(--muted-foreground)]">{entry.name}</span>
+                            </span>
+                          </td>
+                          <td className="text-right tabular-nums text-[var(--foreground)]">
+                            {formatTokenCount(Number(entry.value || 0))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               );
             }}
           />
           <Legend
-            wrapperStyle={{ color: "#9ca3af", fontSize: "12px" }}
+            iconType="plainline"
+            iconSize={10}
+            wrapperStyle={{
+              color: "var(--muted-foreground)",
+              fontFamily: "var(--font-mono)",
+              fontSize: "10px",
+              paddingTop: "8px",
+            }}
           />
           {models.map((model) => (
             <Area
@@ -92,7 +122,8 @@ export default function UsageChart({ data = defaultData, colorsByModel = {} }: U
               dataKey={model}
               stroke={colors[model]}
               fill={`url(#gradient-${model})`}
-              strokeWidth={2}
+              strokeWidth={1.5}
+              activeDot={{ r: 3, strokeWidth: 0 }}
             />
           ))}
         </AreaChart>

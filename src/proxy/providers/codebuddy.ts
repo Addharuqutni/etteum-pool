@@ -55,6 +55,141 @@ interface CodeBuddyTokens {
   web_cookie?: string;
 }
 
+// ============================================================================
+// CodeBuddy Global OAuth device flow — add account via access_token.
+// Mirrors 9router `codebuddy-intl` (src/lib/oauth/providers/codebuddy-intl.js):
+//   1. POST /v2/plugin/auth/state?platform=CLI  body "{}"  → { state, authUrl }
+//   2. open authUrl in browser, user logs in
+//   3. GET  /v2/plugin/auth/token?state=...&platform=CLI → code 0 (accessToken)
+//      or code 11217 (authorization_pending)
+// The "X-No-*" headers bypass the auth middleware (no token yet).
+// ============================================================================
+export const CODEBUDDY_OAUTH = {
+  baseUrl: "https://www.codebuddy.ai",
+  stateUrl: "https://www.codebuddy.ai/v2/plugin/auth/state",
+  tokenUrl: "https://www.codebuddy.ai/v2/plugin/auth/token",
+  refreshUrl: "https://www.codebuddy.ai/v2/plugin/auth/token/refresh",
+  userAgent: "CLI/2.108.1 CodeBuddy/2.108.1",
+  platform: "CLI",
+  pollIntervalMs: 5000,
+} as const;
+
+const CODEBUDDY_OAUTH_NOAUTH_HEADERS: Record<string, string> = {
+  Accept: "application/json",
+  "User-Agent": CODEBUDDY_OAUTH.userAgent,
+  "X-Requested-With": "XMLHttpRequest",
+  "X-Domain": "www.codebuddy.ai",
+  "X-No-Authorization": "true",
+  "X-No-User-Id": "true",
+  "X-No-Enterprise-Id": "true",
+  "X-No-Department-Info": "true",
+  "X-Product": "SaaS",
+};
+
+export async function requestCodebuddyDeviceCode(): Promise<{ state: string; authUrl: string }> {
+  const url = `${CODEBUDDY_OAUTH.stateUrl}?platform=${CODEBUDDY_OAUTH.platform}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { ...CODEBUDDY_OAUTH_NOAUTH_HEADERS, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`CodeBuddy state request failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const data = (await response.json()) as any;
+  if (data.code !== 0 || !data.data?.state || !data.data?.authUrl) {
+    throw new Error(`CodeBuddy state error: ${data.msg || "missing state/authUrl"}`);
+  }
+  return { state: data.data.state, authUrl: data.data.authUrl };
+}
+
+export interface CodebuddyPollResult {
+  status: "pending" | "done" | "error";
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number | null;
+  uid?: string;
+  error?: string;
+}
+
+export async function pollCodebuddyToken(state: string): Promise<CodebuddyPollResult> {
+  const url = `${CODEBUDDY_OAUTH.tokenUrl}?state=${encodeURIComponent(state)}&platform=${CODEBUDDY_OAUTH.platform}`;
+  const response = await fetch(url, { method: "GET", headers: CODEBUDDY_OAUTH_NOAUTH_HEADERS });
+  if (!response.ok) {
+    return { status: "error", error: `Token poll failed (${response.status})` };
+  }
+  const data = (await response.json()) as any;
+
+  // Known response shapes (both observed in the wild):
+  //   wrapped-camel: { code:0, data:{ accessToken, refreshToken, expiresIn } }
+  //   flat-snake:    { access_token, refresh_token, uid }
+  //   wrapped-snake: { code:0, data:{ access_token, refresh_token, uid } }
+  const wrapped = data?.data && typeof data.data === "object" ? data.data : data;
+  const accessToken =
+    wrapped?.accessToken || wrapped?.access_token || data?.accessToken || data?.access_token || null;
+  const refreshToken =
+    wrapped?.refreshToken || wrapped?.refresh_token || data?.refreshToken || data?.refresh_token || "";
+  const expiresIn = wrapped?.expiresIn ?? wrapped?.expires_in ?? data?.expiresIn ?? data?.expires_in ?? null;
+  const uid = wrapped?.uid || data?.uid || null;
+
+  if (accessToken) {
+    return { status: "done", accessToken, refreshToken, expiresIn, uid };
+  }
+  if (data?.code === 11217) return { status: "pending" };
+  return { status: "error", error: data?.msg || "unknown_error" };
+}
+
+/**
+ * Refresh a CodeBuddy international access_token using its refresh_token.
+ *
+ * Contract verified from decolua/9router (codebuddy-intl) + OmniRoute:
+ *   POST /v2/plugin/auth/token/refresh, empty JSON body `{}`, refresh token in
+ *   the `X-Refresh-Token` header (NOT the body), response envelope
+ *   `{ code: 0, data: { accessToken, refreshToken, expiresIn } }`.
+ * HTTP 401/403 on refresh means the refresh token itself is dead → re-login.
+ */
+export async function refreshCodebuddyToken(refreshToken: string): Promise<{
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+}> {
+  const response = await fetch(CODEBUDDY_OAUTH.refreshUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "User-Agent": CODEBUDDY_OAUTH.userAgent,
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Domain": "www.codebuddy.ai",
+      "X-Refresh-Token": refreshToken,
+      "X-Auth-Refresh-Source": "plugin",
+      "X-Product": "SaaS",
+    },
+    body: "{}",
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Refresh token expired or revoked — re-login required");
+  }
+  if (!response.ok) {
+    throw new Error(`CodeBuddy token refresh failed (HTTP ${response.status})`);
+  }
+
+  const data = (await response.json()) as any;
+  if (data?.code !== 0 || !data?.data?.accessToken) {
+    throw new Error(`CodeBuddy token refresh error: ${data?.msg || data?.message || "unknown"}`);
+  }
+
+  const d = data.data;
+  const expiresIn = Number(d.expiresIn) || 86400;
+  return {
+    access_token: d.accessToken,
+    refresh_token: d.refreshToken || refreshToken,
+    expires_at: String(Math.floor(Date.now() / 1000) + expiresIn),
+  };
+}
+
 /** Map cb- prefixed model IDs to the actual CodeBuddy API model names. */
 const CB_MODEL_MAP: Record<string, string> = {
   // Claude
@@ -87,8 +222,6 @@ const CB_MODEL_MAP: Record<string, string> = {
   "cb-deepseek-v3-2": "deepseek-v3-2-volc",
   // Kimi
   "cb-kimi-k2.5": "kimi-k2.5",
-  // Other
-  "cb-enowx": "enowx-default",
 };
 
 /**
@@ -151,7 +284,6 @@ export class CodeBuddyProvider extends BaseProvider {
     { id: "cb-gemini-3.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
     { id: "cb-deepseek-v3-2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
     { id: "cb-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
-    { id: "cb-enowx", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.01 / 1000, creditSource: "estimated" },
   ];
 
   private getTokens(account: Account): CodeBuddyTokens | null {
@@ -304,7 +436,25 @@ export class CodeBuddyProvider extends BaseProvider {
       const response = await this.makeRequest(tokens, request, true);
 
       if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired, re-login required" };
+        const refreshResult = await this.refreshToken(account);
+        if (!refreshResult.success || !refreshResult.tokens) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyTokens;
+        const retryResponse = await this.makeRequest(newTokens, request, true);
+        if (retryResponse.status === 401 || retryResponse.status === 403) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        if (retryResponse.ok) {
+          const retryData = await this.aggregateStreamResponse(retryResponse, request.model);
+          const result = this.buildChatResult(retryData, request);
+          if (result) {
+            result.tokens = newTokens;
+            return result;
+          }
+        }
+        const errText = await retryResponse.text();
+        return { success: false, error: `CodeBuddy API error (${retryResponse.status}): ${errText}` };
       }
 
       if (response.status === 429) {
@@ -325,27 +475,31 @@ export class CodeBuddyProvider extends BaseProvider {
 
       // Aggregate stream into a single response
       const data = await this.aggregateStreamResponse(response, request.model);
-      const promptTokens = data.usage.prompt_tokens || 0;
-      const completionTokens = data.usage.completion_tokens || 0;
-      const totalTokens = data.usage.total_tokens || 0;
-      // Use real credit from CodeBuddy if available, otherwise estimate
-      const realCredit = (data as any)._realCredit;
-      const creditsUsed = realCredit != null ? realCredit : (totalTokens > 0 ? totalTokens * this.getProviderCreditRate(request.model) : 0);
-      const creditSource: "upstream" | "estimated" = realCredit != null ? "upstream" : "estimated";
-      // Remove internal field before sending to client
-      delete (data as any)._realCredit;
-      return {
-        success: true,
-        response: data,
-        tokensUsed: totalTokens,
-        promptTokens,
-        completionTokens,
-        creditsUsed,
-        creditSource,
-      };
+      return this.buildChatResult(data, request);
     } catch (error) {
       return { success: false, error: `CodeBuddy request failed: ${error instanceof Error ? error.message : String(error)}` };
     }
+  }
+
+  private buildChatResult(data: any, request: ChatCompletionRequest): ProviderResult {
+    const promptTokens = data.usage.prompt_tokens || 0;
+    const completionTokens = data.usage.completion_tokens || 0;
+    const totalTokens = data.usage.total_tokens || 0;
+    // Use real credit from CodeBuddy if available, otherwise estimate
+    const realCredit = (data as any)._realCredit;
+    const creditsUsed = realCredit != null ? realCredit : (totalTokens > 0 ? totalTokens * this.getProviderCreditRate(request.model) : 0);
+    const creditSource: "upstream" | "estimated" = realCredit != null ? "upstream" : "estimated";
+    // Remove internal field before sending to client
+    delete (data as any)._realCredit;
+    return {
+      success: true,
+      response: data,
+      tokensUsed: totalTokens,
+      promptTokens,
+      completionTokens,
+      creditsUsed,
+      creditSource,
+    };
   }
 
   async chatCompletionStream(
@@ -361,7 +515,24 @@ export class CodeBuddyProvider extends BaseProvider {
       const response = await this.makeRequest(tokens, request, true);
 
       if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired" };
+        const refreshResult = await this.refreshToken(account);
+        if (!refreshResult.success || !refreshResult.tokens) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyTokens;
+        const retryResponse = await this.makeRequest(newTokens, request, true);
+        if (retryResponse.status === 401 || retryResponse.status === 403) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        if (retryResponse.ok) {
+          const result = this.createStreamResponse(retryResponse, request.model);
+          if (result.success) {
+            result.tokens = newTokens;
+          }
+          return result;
+        }
+        const errText = await retryResponse.text();
+        return { success: false, error: `CodeBuddy API error (${retryResponse.status}): ${errText}` };
       }
 
       if (response.status === 429) {
@@ -387,10 +558,27 @@ export class CodeBuddyProvider extends BaseProvider {
   }
 
   async refreshToken(
-    _account: Account
+    account: Account
   ): Promise<{ success: boolean; tokens?: string; error?: string }> {
-    // CodeBuddy doesn't support token refresh - requires re-login
-    return { success: false, error: "CodeBuddy requires re-login" };
+    const tokens = this.getTokens(account);
+    if (!tokens?.refresh_token) {
+      return { success: false, error: "No refresh token — re-login required" };
+    }
+
+    try {
+      const refreshed = await refreshCodebuddyToken(tokens.refresh_token);
+      return {
+        success: true,
+        tokens: JSON.stringify({
+          ...tokens,
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+          expires_at: refreshed.expires_at,
+        }),
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   async validateAccount(account: Account): Promise<boolean> {
@@ -572,16 +760,11 @@ export class CodeBuddyProvider extends BaseProvider {
   }
 
   private async fetchUserResource(tokens: CodeBuddyTokens): Promise<Response> {
-    const now = new Date();
-    const endDate = new Date(now.getTime() + 365 * 20 * 24 * 60 * 60 * 1000);
-    const payload = {
-      PageNumber: 1,
-      PageSize: 100,
-      ProductCode: "p_tcaca",
-      Status: [0, 3],
-      PackageEndTimeRangeBegin: now.toISOString().replace("T", " ").slice(0, 19),
-      PackageEndTimeRangeEnd: endDate.toISOString().replace("T", " ").slice(0, 19),
-    };
+    // Reference (2026): /v2/billing/meter/get-user-resource takes an empty body `{}`
+    // and returns code 0 + data.Response.Data.Accounts[] (CapacitySize/Used/Remain,
+    // CycleEndTime). The old {PageNumber, PageSize, ProductCode, ...} paginated
+    // payload is no longer required and can fail on newer accounts.
+    const payload = {};
 
     // Use /v2/billing/meter/get-user-resource which works with API key (Bearer token).
     // The old /billing/meter/get-user-resource requires web session cookies that expire.
@@ -601,24 +784,35 @@ export class CodeBuddyProvider extends BaseProvider {
     }, config.providerQuotaTimeoutMs);
   }
 
-  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number } {
+  private parseResourceQuota(data: any): { limit: number; remaining: number; used: number; resetAt?: Date | string | null } {
     const responseData = data.data?.Response?.Data || {};
     const totalDosage = Number(responseData.TotalDosage || 0);
     const resourceAccounts = Array.isArray(responseData.Accounts) ? responseData.Accounts : [];
     let totalRemain = 0;
     let totalUsed = 0;
     let totalSize = 0;
+    let resetAt: Date | null = null;
 
     for (const acct of resourceAccounts) {
       totalRemain += Number(acct.CapacityRemain || 0);
       totalUsed += Number(acct.CapacityUsed || 0);
       totalSize += Number(acct.CapacitySize || 0);
+
+      // CycleEndTime is "YYYY-MM-DD HH:MM:SS" (no TZ) — normalize to UTC and
+      // keep the soonest reset across all account packages.
+      const cycleEnd = typeof acct.CycleEndTime === "string" ? acct.CycleEndTime.trim() : "";
+      if (cycleEnd) {
+        const parsed = new Date(`${cycleEnd.replace(" ", "T")}Z`);
+        if (!Number.isNaN(parsed.getTime()) && (!resetAt || parsed.getTime() < resetAt.getTime())) {
+          resetAt = parsed;
+        }
+      }
     }
 
     const limit = totalSize || totalDosage || totalRemain + totalUsed;
     const remaining = totalRemain;
     const used = totalUsed || Math.max(0, limit - remaining);
-    return { limit, remaining, used };
+    return { limit, remaining, used, resetAt };
   }
 
   private async makeRequest(

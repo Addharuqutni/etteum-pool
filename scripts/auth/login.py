@@ -8,15 +8,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.providers.kiro import KiroProviderAdapter
-from app.providers.kiro_pro import KiroProProviderAdapter
 from app.providers.codebuddy import CodeBuddyProviderAdapter
 from app.providers.wavespeed import WavespeedProviderAdapter
 from app.providers.canva import CanvaProviderAdapter
 from app.providers.yepapi import YepAPIAdapter
 from app.providers.codex import CodexProviderAdapter
-from app.providers.qoder import QoderProviderAdapter
-from app.providers.gitlab_duo import GitLabDuoProviderAdapter
 from app.providers.base import NormalizedAccount
 from app.errors.codes import ErrorCode
 from app.errors.exceptions import BatcherError, RetryableBatcherError
@@ -27,9 +23,6 @@ BASE_DELAY = 2.0
 MAX_DELAY = 15.0
 PROVIDER_TIMEOUT = 180
 CODEBUDDY_TIMEOUT = 600  # 10 minutes — codebuddy has its own inactivity-based timeout (150s no-progress), so this outer timeout is just a safety net
-KIRO_PRO_TIMEOUT = 600  # 10 minutes for kiro-pro (upgrade + payment takes longer)
-GITLAB_DUO_TIMEOUT = 600  # 10 minutes — OAuth + Gmail OTP wait + trial form + PAT gen
-GITLAB_DUO_MAX_RETRIES = 2  # Real Google accounts, lower retry to avoid login lockout
 
 
 def emit(data: dict):
@@ -167,7 +160,7 @@ async def _run_provider_once(adapter, account: NormalizedAccount) -> dict:
                 "codebuddy login succeeded but quota fetch failed — retrying",
             )
 
-        # Post-login hook (e.g., kiro-pro auto-upgrade)
+        # Post-login hook (e.g., provider-specific auto-upgrade)
         upgrade_result = None
         if hasattr(adapter, "post_login_hook"):
             try:
@@ -218,19 +211,13 @@ async def run_provider(adapter, account: NormalizedAccount) -> dict:
 
     if provider_name == "codebuddy":
         max_retries = CODEBUDDY_MAX_RETRIES
-    elif provider_name == "gitlab-duo":
-        max_retries = GITLAB_DUO_MAX_RETRIES
     else:
         max_retries = MAX_RETRIES
 
     for attempt in range(max_retries):
         try:
-            if provider_name == "kiro-pro":
-                timeout = KIRO_PRO_TIMEOUT
-            elif provider_name == "codebuddy":
+            if provider_name == "codebuddy":
                 timeout = CODEBUDDY_TIMEOUT
-            elif provider_name == "gitlab-duo":
-                timeout = GITLAB_DUO_TIMEOUT
             else:
                 timeout = PROVIDER_TIMEOUT
             return await asyncio.wait_for(
@@ -238,21 +225,6 @@ async def run_provider(adapter, account: NormalizedAccount) -> dict:
             )
         except asyncio.TimeoutError:
             last_error = TimeoutError(f"provider timed out after {timeout}s")
-            # For kiro-pro: don't retry on timeout — upgrade/payment phase is long-running
-            # and retrying would restart from login which wastes time
-            if provider_name == "kiro-pro":
-                emit(
-                    {
-                        "type": "error",
-                        "provider": provider_name,
-                        "error": f"timed out after {timeout}s (no retry for kiro-pro upgrade)",
-                    }
-                )
-                return {
-                    "success": False,
-                    "provider": provider_name,
-                    "error": f"timed out after {timeout}s",
-                }
             if attempt < max_retries - 1:
                 delay = retry_delay(attempt)
                 emit(
@@ -372,24 +344,20 @@ async def main(email: str, password: str):
 
     if allowed_providers:
         provider_specs = {
-            "kiro": (KiroProviderAdapter(), NormalizedAccount(provider="kiro", identifier=email, secret=password)),
             "codebuddy": (CodeBuddyProviderAdapter(), NormalizedAccount(provider="codebuddy", identifier=email, secret=password)),
             "canva": (CanvaProviderAdapter(), NormalizedAccount(provider="canva", identifier=email, secret=password)),
-            "kiro-pro": (KiroProProviderAdapter(), NormalizedAccount(provider="kiro-pro", identifier=email, secret=password)),
             "codex": (CodexProviderAdapter(), NormalizedAccount(provider="codex", identifier=email, secret=password)),
-            "qoder": (QoderProviderAdapter(), NormalizedAccount(provider="qoder", identifier=email, secret=password)),
-            "gitlab-duo": (GitLabDuoProviderAdapter(), NormalizedAccount(provider="gitlab-duo", identifier=email, secret=password)),
         }
         tasks = []
         task_names = []
-        for name in ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"]:
+        for name in ["codebuddy", "canva", "codex"]:
             if name in allowed_providers:
                 adapter, account = provider_specs[name]
                 tasks.append(run_provider(adapter, account))
                 task_names.append(name)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         result = {"type": "result"}
-        for name in ["kiro", "kiro-pro", "codebuddy", "wavespeed", "canva", "yepapi", "codex", "qoder", "gitlab-duo"]:
+        for name in ["codebuddy", "wavespeed", "canva", "yepapi", "codex"]:
             result[name] = {"success": False, "provider": name, "error": "skipped"}
         for name, provider_result in zip(task_names, results):
             if isinstance(provider_result, BaseException):
@@ -398,7 +366,6 @@ async def main(email: str, password: str):
         emit(result)
         return
 
-    kiro_account = NormalizedAccount(provider="kiro", identifier=email, secret=password)
     cb_account = NormalizedAccount(
         provider="codebuddy", identifier=email, secret=password
     )
@@ -412,7 +379,6 @@ async def main(email: str, password: str):
         provider="yepapi", identifier=email, secret=password
     )
 
-    kiro_adapter = KiroProviderAdapter()
     cb_adapter = CodeBuddyProviderAdapter()
     ws_adapter = WavespeedProviderAdapter()
     canva_adapter = CanvaProviderAdapter()
@@ -422,7 +388,6 @@ async def main(email: str, password: str):
     canva_skipped = {"success": False, "provider": "canva", "error": "skipped"}
     yep_skipped = {"success": False, "provider": "yepapi", "error": "skipped"}
 
-    kiro_skipped = {"success": False, "provider": "kiro", "error": "skipped"}
     cb_skipped = {"success": False, "provider": "codebuddy", "error": "skipped"}
 
     run_canva = priority == "canva" or concurrent >= 4
@@ -433,41 +398,35 @@ async def main(email: str, password: str):
             cb_result = await run_provider(cb_adapter, cb_account)
             if isinstance(cb_result, BaseException):
                 cb_result = {"success": False, "provider": "codebuddy", "error": str(cb_result)}
-            result = {"type": "result", "kiro": kiro_skipped, "codebuddy": cb_result, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
+            result = {"type": "result", "codebuddy": cb_result, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
         elif priority == "wavespeed":
             ws_result = await run_provider(ws_adapter, ws_account)
             if isinstance(ws_result, BaseException):
                 ws_result = {"success": False, "provider": "wavespeed", "error": str(ws_result)}
-            result = {"type": "result", "kiro": kiro_skipped, "codebuddy": cb_skipped, "wavespeed": ws_result, "canva": canva_skipped, "yepapi": yep_skipped}
+            result = {"type": "result", "codebuddy": cb_skipped, "wavespeed": ws_result, "canva": canva_skipped, "yepapi": yep_skipped}
         elif priority == "canva":
             canva_result = await run_provider(canva_adapter, canva_account)
             if isinstance(canva_result, BaseException):
                 canva_result = {"success": False, "provider": "canva", "error": str(canva_result)}
-            result = {"type": "result", "kiro": kiro_skipped, "codebuddy": cb_skipped, "wavespeed": ws_skipped, "canva": canva_result, "yepapi": yep_skipped}
+            result = {"type": "result", "codebuddy": cb_skipped, "wavespeed": ws_skipped, "canva": canva_result, "yepapi": yep_skipped}
         elif priority == "yepapi":
             yep_result = await run_provider(yep_adapter, yep_account)
             if isinstance(yep_result, BaseException):
                 yep_result = {"success": False, "provider": "yepapi", "error": str(yep_result)}
-            result = {"type": "result", "kiro": kiro_skipped, "codebuddy": cb_skipped, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_result}
+            result = {"type": "result", "codebuddy": cb_skipped, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_result}
         else:
-            kiro_result = await run_provider(kiro_adapter, kiro_account)
-            if isinstance(kiro_result, BaseException):
-                kiro_result = {"success": False, "provider": "kiro", "error": str(kiro_result)}
-            result = {"type": "result", "kiro": kiro_result, "codebuddy": cb_skipped, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
+            cb_result = await run_provider(cb_adapter, cb_account)
+            if isinstance(cb_result, BaseException):
+                cb_result = {"success": False, "provider": "codebuddy", "error": str(cb_result)}
+            result = {"type": "result", "codebuddy": cb_result, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
         emit(result)
         return
 
     if concurrent == 2:
-        kiro_result, cb_result = await asyncio.gather(
-            run_provider(kiro_adapter, kiro_account),
-            run_provider(cb_adapter, cb_account),
-            return_exceptions=True,
-        )
-        if isinstance(kiro_result, BaseException):
-            kiro_result = {"success": False, "provider": "kiro", "error": str(kiro_result)}
+        cb_result = await run_provider(cb_adapter, cb_account)
         if isinstance(cb_result, BaseException):
             cb_result = {"success": False, "provider": "codebuddy", "error": str(cb_result)}
-        result = {"type": "result", "kiro": kiro_result, "codebuddy": cb_result, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
+        result = {"type": "result", "codebuddy": cb_result, "wavespeed": ws_skipped, "canva": canva_skipped, "yepapi": yep_skipped}
         emit(result)
         return
 
@@ -475,7 +434,6 @@ async def main(email: str, password: str):
     yep_result = yep_skipped
 
     tasks = [
-        run_provider(kiro_adapter, kiro_account),
         run_provider(cb_adapter, cb_account),
         run_provider(ws_adapter, ws_account),
     ]
@@ -486,18 +444,15 @@ async def main(email: str, password: str):
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    kiro_result = results[0]
-    cb_result = results[1]
-    ws_result = results[2]
-    idx = 3
+    cb_result = results[0]
+    ws_result = results[1]
+    idx = 2
     if run_canva and idx < len(results):
         canva_result = results[idx]
         idx += 1
     if run_yepapi and idx < len(results):
         yep_result = results[idx]
 
-    if isinstance(kiro_result, BaseException):
-        kiro_result = {"success": False, "provider": "kiro", "error": str(kiro_result)}
     if isinstance(cb_result, BaseException):
         cb_result = {"success": False, "provider": "codebuddy", "error": str(cb_result)}
     if isinstance(ws_result, BaseException):
@@ -509,7 +464,6 @@ async def main(email: str, password: str):
 
     result = {
         "type": "result",
-        "kiro": kiro_result,
         "codebuddy": cb_result,
         "wavespeed": ws_result,
         "canva": canva_result,

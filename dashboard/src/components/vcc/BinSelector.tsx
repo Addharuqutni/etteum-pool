@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { fetchApi } from '@/lib/api';
 import type { BinEntry } from '@/lib/bin-data';
@@ -133,18 +134,17 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Brand Selection */}
-      <div className="space-y-2">
-        <label htmlFor="brand" className="text-sm font-medium">
+      <div>
+        <label htmlFor="brand" className="eyebrow mb-1.5 block">
           Card Brand
         </label>
-        <select
+        <Select
           id="brand"
           value={selectedBrand}
           onChange={handleBrandChange}
           disabled={loading}
-          className="w-full h-10 px-3 rounded-md border border-input bg-background disabled:opacity-50"
         >
           <option value="">Select a brand</option>
           {brands.map((brand) => (
@@ -152,20 +152,19 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
               {brand.charAt(0).toUpperCase() + brand.slice(1)}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {/* Country Selection */}
-      <div className="space-y-2">
-        <label htmlFor="country" className="text-sm font-medium">
+      <div>
+        <label htmlFor="country" className="eyebrow mb-1.5 block">
           Country
         </label>
-        <select
+        <Select
           id="country"
           value={selectedCountry}
           onChange={handleCountryChange}
           disabled={!selectedBrand || loading}
-          className="w-full h-10 px-3 rounded-md border border-input bg-background disabled:opacity-50"
         >
           <option value="">Select a country</option>
           {countries.map((country) => (
@@ -173,20 +172,20 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
               {country}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {/* BIN Selection */}
-      <div className="space-y-2">
-        <label htmlFor="bin" className="text-sm font-medium">
+      <div>
+        <label htmlFor="bin" className="eyebrow mb-1.5 block">
           BIN
         </label>
-        <select
+        <Select
           id="bin"
           value={selectedBin}
           onChange={handleBinChange}
           disabled={!selectedCountry || loading}
-          className="w-full h-10 px-3 rounded-md border border-input bg-background disabled:opacity-50"
+          className="font-mono"
         >
           <option value="">Select a BIN</option>
           {bins.map((binEntry) => (
@@ -194,12 +193,12 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
               {binEntry.bin} - {binEntry.issuer}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {/* Custom BIN Input */}
-      <div className="space-y-2">
-        <label htmlFor="custom-bin" className="text-sm font-medium">
+      <div>
+        <label htmlFor="custom-bin" className="eyebrow mb-1.5 block">
           Or enter custom BIN (6 digits)
         </label>
         <Input
@@ -207,6 +206,7 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
           type="text"
           placeholder="Enter 6-digit BIN"
           maxLength={6}
+          className="font-mono"
           value={selectedBin}
           onChange={(e) => {
             const bin = e.target.value.replace(/\D/g, '');
@@ -218,15 +218,24 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
 
       {/* BIN Info Display */}
       {binInfo && (
-        <div className="p-4 border rounded-lg bg-muted/50 space-y-2">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="space-y-2 border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2">
+          <div className="flex items-center gap-2">
             <Badge variant="secondary">{binInfo.brand.toUpperCase()}</Badge>
             {binInfo.type && <Badge variant="outline">{binInfo.type}</Badge>}
           </div>
-          <div className="text-sm space-y-1">
-            <div><span className="font-medium">BIN:</span> {binInfo.bin}</div>
-            <div><span className="font-medium">Issuer:</span> {binInfo.issuer}</div>
-            <div><span className="font-medium">Country:</span> {binInfo.countryName}</div>
+          <div className="space-y-1 font-mono text-[11px] text-[var(--muted-foreground)]">
+            <div>
+              <span className="text-[var(--muted-foreground)]">BIN:</span>{' '}
+              <span className="text-[var(--foreground)]">{binInfo.bin}</span>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)]">Issuer:</span>{' '}
+              <span className="text-[var(--foreground)]">{binInfo.issuer}</span>
+            </div>
+            <div>
+              <span className="text-[var(--muted-foreground)]">Country:</span>{' '}
+              <span className="text-[var(--foreground)]">{binInfo.countryName}</span>
+            </div>
           </div>
         </div>
       )}

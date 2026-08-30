@@ -4,6 +4,7 @@ import { modelMappings, settings } from "../db/schema";
 import { asc, eq } from "drizzle-orm";
 import { invalidateModelMappingCache } from "../proxy/model-mapping";
 import { getAllModels } from "../proxy/router";
+import { getCombosCached } from "../proxy/combos";
 import { broadcast } from "../ws/index";
 import {
   getClientList,
@@ -18,6 +19,7 @@ import { CLIENT_META } from "../lib/client-configs/types";
 export const integrationRouter = new Hono();
 
 const MAPPING_ENABLED_SETTING = "model_mapping_enabled";
+const CLIENT_MODELS_PREFIX = "client_models:"; // key: "client_models:opencode"
 const VALID_MATCH_TYPES = new Set(["contains", "exact", "regex"]);
 
 interface MappingInput {
@@ -45,13 +47,57 @@ async function setMasterEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
+ * Get the subset of model IDs selected for a given client.
+ * Returns null when the user has never saved a selection (→ default: all models).
+ */
+async function getClientSelectedModels(clientId: string): Promise<string[] | null> {
+  const key = `${CLIENT_MODELS_PREFIX}${clientId}`;
+  const [row] = await db.select().from(settings).where(eq(settings.key, key));
+  if (!row?.value) return null;
+  try {
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed.map(String) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the subset of model IDs selected for a given client.
+ */
+async function setClientSelectedModels(clientId: string, models: string[]): Promise<void> {
+  const key = `${CLIENT_MODELS_PREFIX}${clientId}`;
+  const value = JSON.stringify(models);
+  const existing = await db.select().from(settings).where(eq(settings.key, key));
+  if (existing.length > 0) {
+    await db.update(settings).set({ value, updatedAt: new Date() }).where(eq(settings.key, key));
+  } else {
+    await db.insert(settings).values({ key, value });
+  }
+}
+
+/**
+ * Load selections for every supported client in a single pass.
+ */
+async function loadAllClientModelSelections(): Promise<Record<string, string[] | null>> {
+  const ids = Object.keys(CLIENT_META) as ClientTarget[];
+  const entries = await Promise.all(
+    ids.map(async (id) => [id, await getClientSelectedModels(id)] as const)
+  );
+  return Object.fromEntries(entries);
+}
+
+/**
  * GET /api/integration - current mappings, master toggle, and the list of
  * models available in the pool (so the dashboard can offer them as targets).
  */
 integrationRouter.get("/", async (c) => {
   const mappings = await db.select().from(modelMappings).orderBy(asc(modelMappings.priority));
   const enabled = await getMasterEnabled();
-  const models = getAllModels().map((m) => ({ id: m.id, owned_by: m.owned_by }));
+  const models = [
+    ...getAllModels().map((m) => ({ id: m.id, owned_by: m.owned_by })),
+    ...getCombosCached().map((c) => ({ id: c.name, owned_by: "combo", is_combo: true })),
+  ];
   return c.json({ enabled, mappings, models });
 });
 
@@ -204,6 +250,8 @@ integrationRouter.post("/apply-config", async (c) => {
 async function buildProxyInfo(body: {
   baseUrl?: string;
   modelId?: string;
+  /** Optional subset of model IDs to include in the generated config. */
+  selectedModels?: string[];
 }): Promise<ProxyConnectionInfo> {
   const { config } = await import("../config");
   const apiKeyRow = await db
@@ -217,17 +265,45 @@ async function buildProxyInfo(body: {
   const modelId = body.modelId || "kp-sonnet-4.6";
 
   // Build lightweight model list for config generators
-  const models = getAllModels().map((m) => ({
-    id: m.id,
-    name: m.id,
-    maxInputTokens: m.context_window ?? 200000,
-    maxOutputTokens: m.max_output ?? 32000,
-    inputTypes: m.vision
-      ? ["text", "image"]
-      : m.thinking
-        ? ["text"]
-        : ["text"],
-  }));
+  const allModels = [
+    ...getAllModels().map((m) => ({
+      id: m.id,
+      name: m.id,
+      maxInputTokens: m.context_window ?? 200000,
+      maxOutputTokens: m.max_output ?? 32000,
+      inputTypes: m.vision
+        ? ["text", "image"]
+        : m.thinking
+          ? ["text"]
+          : ["text"],
+    })),
+    // Combos are synthetic models — include them so a combo selected as the
+    // default (or in the subset) lands in the generated config as a real
+    // provider model entry. The proxy resolves the combo name at request time.
+    ...getCombosCached().map((c) => ({
+      id: c.name,
+      name: c.name,
+      maxInputTokens: 200000,
+      maxOutputTokens: 32000,
+      inputTypes: ["text"],
+    })),
+  ];
+
+  // Filter to the user-selected subset when provided. An empty/non-array
+  // value falls back to all models (backward-compatible behaviour).
+  let models = allModels;
+  if (Array.isArray(body.selectedModels) && body.selectedModels.length > 0) {
+    const selectedSet = new Set(body.selectedModels);
+    models = allModels.filter((m) => selectedSet.has(m.id));
+    // Ensure the default modelId is always present so the generated config
+    // remains valid even if the user forgot to tick it.
+    if (!models.some((m) => m.id === modelId)) {
+      const fallback = allModels.find((m) => m.id === modelId);
+      if (fallback) models = [fallback, ...models];
+    }
+    // Guard against an empty subset (e.g. user supplied only unknown IDs).
+    if (models.length === 0) models = allModels;
+  }
 
   return { proxyOrigin, openaiBaseUrl, apiKey, modelId, models };
 }
@@ -238,17 +314,48 @@ async function buildProxyInfo(body: {
 integrationRouter.get("/clients", async (c) => {
   try {
     const clients = getClientList();
-    const models = getAllModels().map((m) => ({
-      id: m.id,
-      owned_by: m.owned_by,
-      context_window: m.context_window,
-      max_output: m.max_output,
-      thinking: m.thinking,
-      vision: m.vision,
-    }));
-    return c.json({ clients, models });
+    const models = [
+      ...getAllModels().map((m) => ({
+        id: m.id,
+        owned_by: m.owned_by,
+        context_window: m.context_window,
+        max_output: m.max_output,
+        thinking: m.thinking,
+        vision: m.vision,
+      })),
+      ...getCombosCached().map((c) => ({ id: c.name, owned_by: "combo", is_combo: true })),
+    ];
+    const clientModelSelections = await loadAllClientModelSelections();
+    return c.json({ clients, models, clientModelSelections });
   } catch (error: any) {
     return c.json({ error: error.message }, 500);
+  }
+});
+
+/**
+ * PUT /api/integration/clients/:clientId/models - persist the subset of model
+ * IDs the user wants included in this client's generated config.
+ */
+integrationRouter.put("/clients/:clientId/models", async (c) => {
+  const clientId = c.req.param("clientId") as ClientTarget;
+  if (!CLIENT_META[clientId]) {
+    return c.json({ error: `Unknown client: ${clientId}` }, 404);
+  }
+
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const models: string[] = Array.isArray(body.models)
+      ? body.models.map(String)
+      : [];
+    await setClientSelectedModels(clientId, models);
+    broadcast({ type: "client_models_updated", data: { clientId } });
+    return c.json({ success: true, clientId, models });
+  } catch (error: any) {
+    console.error(`[Integration] Failed to save model selection for ${clientId}:`, error);
+    return c.json(
+      { success: false, error: error.message || "Failed to save model selection" },
+      500
+    );
   }
 });
 
@@ -297,12 +404,22 @@ integrationRouter.post("/clients/:clientId/apply", async (c) => {
 
 /**
  * POST /api/integration/apply-all - apply config to all detected clients.
+ * Accepts an optional `clientModelSelections` map (clientId → model IDs) so
+ * each client can receive its own subset of models.
  */
 integrationRouter.post("/apply-all", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const info = await buildProxyInfo(body);
-    const results = await applyAllClients(info);
+    const clientModelSelections: Record<string, string[]> | undefined =
+      body.clientModelSelections;
+    const results = await applyAllClients(async (clientId: ClientTarget) => {
+      const selectedModels = clientModelSelections?.[clientId];
+      return buildProxyInfo({
+        baseUrl: body.baseUrl,
+        modelId: body.modelId,
+        selectedModels,
+      });
+    });
     return c.json({ success: true, results });
   } catch (error: any) {
     console.error("[Integration] Failed to apply all configs:", error);

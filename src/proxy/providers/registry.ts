@@ -1,13 +1,12 @@
 import type { BaseProvider, ModelInfo } from "./base";
-import { KiroProvider } from "./kiro";
+import { config } from "../../config";
 import { CodeBuddyProvider } from "./codebuddy";
 import { CodeBuddyChinaProvider } from "./codebuddy-china";
 import { CanvaProvider } from "./canva";
 import { CodexProvider } from "./codex";
-import { QoderProvider } from "./qoder";
+import { GrokCliProvider } from "./grok-cli";
 import { ByokProvider } from "./byok";
-import { GitlabDuoProvider } from "./gitlab-duo";
-import { YouMindProvider } from "./youmind";
+import { ClaudeProvider } from "./claude";
 
 /**
  * Single source of truth for the provider set.
@@ -18,56 +17,36 @@ import { YouMindProvider } from "./youmind";
  *
  * Routing (getProviderForModel) and model listing (getAllModels) iterate this
  * list — there is no per-provider logic anywhere else. Order matters only for
- * disambiguating overlapping patterns: more specific providers come first, and
- * the single isFallback provider (kiro standard) is consulted last.
+ * disambiguating overlapping patterns: more specific providers come first.
+ * Unknown models resolve to null (no fallback provider anymore).
  */
-// kiro and kiro-pro are two variants of the SAME provider class — same upstream
-// (AWS CodeWhisperer), different model catalog + account pool. They keep
-// distinct provider names so DB/bot/dashboard treat them separately.
-const kiro = new KiroProvider({ variant: "standard" });
-const kiroPro = new KiroProvider({ variant: "pro" });
 const codebuddy = new CodeBuddyProvider();
 const codebuddyChina = new CodeBuddyChinaProvider();
 const canva = new CanvaProvider();
 const codex = new CodexProvider();
-const qoder = new QoderProvider();
+const grokCli = new GrokCliProvider();
 const byok = new ByokProvider();
-const gitlabDuo = new GitlabDuoProvider();
-const youmind = new YouMindProvider();
+const claude = new ClaudeProvider();
 
-// Priority order. canva/qoder/codex/kiro-pro/youmind have unique prefixes; codex
-// is listed before codebuddy so the literal "gpt-5-codex" resolves to codex
-// while codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks
-// dynamic prefixes from DB accounts. kiro is the fallback. gitlab-duo owns
-// `claude_(haiku|sonnet|opus)_<digit>...` underscore-style identifiers — no
-// overlap with any other provider, so position is not load-bearing. youmind
-// owns the `ym-*` prefix exclusively — also position-independent, but slotted
-// alongside the other prefix-based providers for readability.
-const PROVIDER_ORDER = [gitlabDuo, canva, qoder, codex, kiroPro, youmind, byok, codebuddyChina, codebuddy, kiro] as const;
+// Priority order. canva/codex/grok-cli/claude have unique prefixes; codex is
+// listed before codebuddy so the literal "gpt-5-codex" resolves to codex while
+// codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks dynamic
+// prefixes from DB accounts. claude owns `cc-*` (the assistant OAuth); grok-cli
+// owns exact `grok-4.5*` ids from Grok Build catalog.
+const PROVIDER_ORDER = [canva, codex, grokCli, claude, byok, codebuddyChina, codebuddy];
 
-export const providers = {
-  kiro,
-  "kiro-pro": kiroPro,
-  codebuddy,
-  "codebuddy-china": codebuddyChina,
-  canva,
-  codex,
-  qoder,
-  byok,
-  "gitlab-duo": gitlabDuo,
-  youmind,
-} as const;
+/** Canonical provider name union (mirrors config.providers). */
+export type ProviderName = (typeof config.providers)[number];
 
-export type ProviderName = keyof typeof providers;
-
-/** Map a model id to the provider that handles it. */
+/** Resolve which provider owns a model id, or null when none does. */
 export function getProviderForModel(model: string): ProviderName | null {
-  for (const provider of PROVIDER_ORDER) {
-    if (provider.ownsModel(model)) return provider.name as ProviderName;
-  }
-  const fallback = PROVIDER_ORDER.find((p) => p.isFallback);
-  return (fallback?.name as ProviderName) ?? null;
+  return PROVIDER_ORDER.find((p) => p.ownsModel(model))?.name ?? null;
 }
+
+/** Provider instances keyed by name. */
+export const providers: Record<ProviderName, BaseProvider> = Object.fromEntries(
+  PROVIDER_ORDER.map((p) => [p.name, p]),
+) as Record<ProviderName, BaseProvider>;
 
 /** All models across every registered provider. */
 export function getAllModels(): ModelInfo[] {
@@ -82,18 +61,7 @@ export async function refreshByokModels(): Promise<void> {
   await byok.refreshModelsCache();
 }
 
-/** Refresh GitLab Duo models from every active gitlab-duo account's metadata. */
-export async function refreshGitlabDuoModels(): Promise<void> {
-  await gitlabDuo.refreshModelsCache();
-}
-
 /** Get BYOK provider instance. */
 export function getByokProvider(): ByokProvider {
   return byok;
 }
-
-/** Get GitLab Duo provider instance. */
-export function getGitlabDuoProvider(): GitlabDuoProvider {
-  return gitlabDuo;
-}
-

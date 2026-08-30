@@ -13,6 +13,7 @@
 import { db, client } from "../db/index";
 import { modelMappings, settings, type ModelMapping } from "../db/schema";
 import { asc, eq } from "drizzle-orm";
+import { getByokProvider } from "./providers/registry";
 
 const MAPPING_ENABLED_SETTING = "model_mapping_enabled";
 
@@ -123,22 +124,24 @@ function matchesPattern(model: string, rule: ModelMapping): boolean {
 }
 
 /**
- * Model ids that are native to a specific in-pool provider (not Claude Code's
+ * Model ids that are native to a specific in-pool provider (not the assistant's
  * generic anthropic ids) should bypass mapping entirely — otherwise calling
  * `claude_sonnet_4_6_vertex` directly gets rewritten by the "sonnet" template.
  *
- * Claude Code only ever sends DASHED ids ("claude-3-5-sonnet-..."), so using
+ * the assistant only ever sends DASHED ids ("claude-3-5-sonnet-..."), so using
  * underscore presence as the discriminator is a safe and zero-config rule.
  */
 function isNativeProviderId(model: string): boolean {
-  // GitLab Duo identifiers: claude_sonnet_4_6, gpt_5_codex, gemini_3_5_flash, …
+  // Underscore-style identifiers: claude_sonnet_4_6, gpt_5_codex, gemini_3_5_flash, …
   if (/^(claude|gpt|gemini)_/.test(model)) return true;
   // Explicit alias prefixes used by routed providers:
-  if (model.startsWith("gitlab-duo:")) return true;
-  if (model.startsWith("qd-")) return true;          // Qoder
+  if (model.startsWith("qd-")) return true;          // Qoder (legacy, kept for id stability)
   if (model.startsWith("cb-")) return true;          // CodeBuddy
-  if (model.startsWith("ym-")) return true;          // YouMind
-  if (model.startsWith("kiro:")) return true;        // Kiro Pro variant
+  if (model.startsWith("ym-")) return true;          // YouMind (legacy, kept for id stability)
+  // BYOK account ids ("prefix-model", e.g. "genspark-claude-opus-5") are valid
+  // in-pool ids — the generic "opus"/"sonnet"/"haiku" templates must never
+  // rewrite them (same rationale as the underscore rule above).
+  if (getByokProvider().ownsModel(model)) return true;
   return false;
 }
 

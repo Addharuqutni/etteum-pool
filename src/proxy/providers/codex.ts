@@ -25,7 +25,11 @@ const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_SCOPE = "openid profile email offline_access";
 
 const codexModelMap: Record<string, string> = {
-  "codex-auto": "gpt-5.3-codex",
+  "codex-auto": "gpt-5.6-sol",
+  "codex-gpt-5.6": "gpt-5.6-sol",
+  "codex-gpt-5.6-sol": "gpt-5.6-sol",
+  "codex-gpt-5.6-terra": "gpt-5.6-terra",
+  "codex-gpt-5.6-luna": "gpt-5.6-luna",
   "codex-gpt-5.5-xhigh": "gpt-5.5-xhigh",
   "gpt-5.5-xhigh": "gpt-5.5-xhigh",
   "codex-gpt-5.5": "gpt-5.5",
@@ -39,6 +43,41 @@ interface PendingToolCall {
   id: string;
   name: string;
   arguments: string;
+}
+
+/**
+ * Find the next SSE event boundary in `buffer`.
+ *
+ * Upstream (chatgpt.com / Codex responses) may terminate events with either a
+ * LF blank line ("\n\n") or a CRLF blank line ("\r\n\r\n"). Splitting on "\n\n"
+ * alone silently swallows every event when the server uses CRLF, which causes
+ * the stream to never emit content and never reach `response.completed` — the
+ * client sees an empty response that stalls forever. Match either terminator.
+ *
+ * Returns the index of the start of the trailing blank-line sequence, or -1.
+ */
+function indexOfSseBoundary(buffer: string): number {
+  const lf = buffer.indexOf("\n\n");
+  const crlf = buffer.indexOf("\r\n\r\n");
+  if (lf === -1) return crlf;
+  if (crlf === -1) return lf;
+  return Math.min(lf, crlf);
+}
+
+/** Length of the matched SSE terminator at `idx` (2 for LF, 4 for CRLF). */
+function sseBoundaryLength(buffer: string, idx: number): number {
+  return buffer.startsWith("\r\n\r\n", idx) ? 4 : 2;
+}
+
+/** Extract and concatenate all `data:` field payloads from one raw SSE event. */
+function extractSseData(rawEvent: string): string {
+  let dataLine = "";
+  for (const line of rawEvent.split("\n")) {
+    const trimmed = line.replace(/\r$/, "");
+    if (trimmed.startsWith("data: ")) dataLine += trimmed.slice(6);
+    else if (trimmed.startsWith("data:")) dataLine += trimmed.slice(5);
+  }
+  return dataLine;
 }
 
 interface CodexReasoningConfig {
@@ -55,7 +94,11 @@ export class CodexProvider extends BaseProvider {
   }
 
   supportedModels: ModelInfo[] = [
-    { id: "codex-auto", object: "model", created: Date.now(), owned_by: "codex", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.012 / 1000, creditSource: "estimated" },
+    { id: "codex-auto", object: "model", created: Date.now(), owned_by: "codex", context_window: 1050000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.03 / 1000, creditSource: "estimated" },
+    { id: "codex-gpt-5.6", object: "model", created: Date.now(), owned_by: "codex", context_window: 1050000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.03 / 1000, creditSource: "estimated" },
+    { id: "codex-gpt-5.6-sol", object: "model", created: Date.now(), owned_by: "codex", context_window: 1050000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.03 / 1000, creditSource: "estimated" },
+    { id: "codex-gpt-5.6-terra", object: "model", created: Date.now(), owned_by: "codex", context_window: 1050000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.015 / 1000, creditSource: "estimated" },
+    { id: "codex-gpt-5.6-luna", object: "model", created: Date.now(), owned_by: "codex", context_window: 1050000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.006 / 1000, creditSource: "estimated" },
     { id: "codex-gpt-5.5-xhigh", object: "model", created: Date.now(), owned_by: "codex", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02 / 1000, creditSource: "estimated" },
     { id: "codex-gpt-5.5", object: "model", created: Date.now(), owned_by: "codex", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02 / 1000, creditSource: "estimated" },
     { id: "codex-gpt-5.4", object: "model", created: Date.now(), owned_by: "codex", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.015 / 1000, creditSource: "estimated" },
@@ -90,6 +133,28 @@ export class CodexProvider extends BaseProvider {
         if (typeof block === "string") return block;
         if (block?.type === "text" || block?.type === "input_text" || block?.type === "output_text") return block.text || "";
         if (block?.type === "tool_result") return this.contentToText(block.content) || String(block.content || "");
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /**
+   * Extract only the human/assistant-visible text from a content array, ignoring
+   * tool-use and tool-result blocks. Used when building a `message` item for the
+   * Responses API: tool_use blocks become separate `function_call` items and
+   * tool_result blocks become separate `function_call_output` items, so folding
+   * their text into the message would send the same content to upstream twice
+   * (inflating input tokens on every tool turn).
+   */
+  private visibleText(content: unknown): string {
+    if (!content) return "";
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content
+      .map((block: any) => {
+        if (typeof block === "string") return block;
+        if (block?.type === "text" || block?.type === "input_text" || block?.type === "output_text") return block.text || "";
         return "";
       })
       .filter(Boolean)
@@ -215,16 +280,17 @@ export class CodexProvider extends BaseProvider {
     const items: unknown[] = [];
     for (const msg of request.messages) {
       const rawRole = msg.role as string;
-      const text = this.contentToText(msg.content);
+      const text = this.visibleText(msg.content);
       if (rawRole === "system") {
         if (text) systemParts.push(text);
         continue;
       }
       if (rawRole === "tool") {
+        // OpenAI tool role: content is the tool output as plain text.
         items.push({
           type: "function_call_output",
           call_id: msg.tool_call_id || crypto.randomUUID(),
-          output: text,
+          output: this.contentToText(msg.content),
         });
         continue;
       }
@@ -362,15 +428,11 @@ export class CodexProvider extends BaseProvider {
         buffer += decoder.decode(value, { stream: true });
 
         let idx;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        while ((idx = indexOfSseBoundary(buffer)) !== -1) {
           const event = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
+          buffer = buffer.slice(idx + sseBoundaryLength(buffer, idx));
 
-          let dataLine = "";
-          for (const line of event.split("\n")) {
-            if (line.startsWith("data: ")) dataLine += line.slice(6);
-            else if (line.startsWith("data:")) dataLine += line.slice(5);
-          }
+          const dataLine = extractSseData(event);
           if (!dataLine || dataLine === "[DONE]") continue;
 
           try {
@@ -491,12 +553,13 @@ export class CodexProvider extends BaseProvider {
           const emittedToolIndexes = new Set<number>();
           const reasoningByOutput = new Map<number, string>();
 
-          const emit = (delta: any, finish_reason: string | null = null) => {
+          const emit = (delta: any, finish_reason: string | null = null, usage?: ChatCompletionResponse["usage"]) => {
             const chunk: any = {
               id, object: "chat.completion.chunk",
               created: Math.floor(Date.now() / 1000),
               model,
               choices: [{ index: 0, delta, finish_reason }],
+              ...(usage ? { usage } : {}),
             };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
           };
@@ -557,15 +620,11 @@ export class CodexProvider extends BaseProvider {
               buffer += decoder.decode(value, { stream: true });
 
               let idx;
-              while ((idx = buffer.indexOf("\n\n")) !== -1) {
+              while ((idx = indexOfSseBoundary(buffer)) !== -1) {
                 const event = buffer.slice(0, idx);
-                buffer = buffer.slice(idx + 2);
+                buffer = buffer.slice(idx + sseBoundaryLength(buffer, idx));
 
-                let dataLine = "";
-                for (const line of event.split("\n")) {
-                  if (line.startsWith("data: ")) dataLine += line.slice(6);
-                  else if (line.startsWith("data:")) dataLine += line.slice(5);
-                }
+                const dataLine = extractSseData(event);
                 if (!dataLine || dataLine === "[DONE]") continue;
 
                 try {
@@ -627,7 +686,19 @@ export class CodexProvider extends BaseProvider {
                   } else if (t === "response.completed" || t === "response.done") {
                     provider.collectCompletedToolCalls(obj.response, toolCallsByIndex);
                     emitMissingCompletedToolCalls();
-                    emit({}, hasToolCalls ? "tool_calls" : "stop");
+                    const upstreamUsage = obj.response?.usage;
+                    const promptTokens = Number(upstreamUsage?.input_tokens) || 0;
+                    const completionTokens = Number(upstreamUsage?.output_tokens) || 0;
+                    const totalTokens = Number(upstreamUsage?.total_tokens) || promptTokens + completionTokens;
+                    emit(
+                      {},
+                      hasToolCalls ? "tool_calls" : "stop",
+                      upstreamUsage ? {
+                        prompt_tokens: promptTokens,
+                        completion_tokens: completionTokens,
+                        total_tokens: totalTokens,
+                      } : undefined,
+                    );
                     controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                     controller.close();
                     return;

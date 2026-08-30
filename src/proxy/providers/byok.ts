@@ -84,16 +84,25 @@ export class ByokProvider extends BaseProvider {
     this.refreshPromise = this.loadFromDb();
     try {
       await this.refreshPromise;
+    } catch (err) {
+      console.error("[BYOK] Failed to refresh account cache:", err);
+      throw err;
     } finally {
       this.refreshPromise = null;
     }
   }
 
   private async loadFromDb(): Promise<void> {
-    const byokAccounts = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.provider, "byok"));
+    let byokAccounts;
+    try {
+      byokAccounts = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.provider, "byok"));
+    } catch (err) {
+      console.error("[BYOK] Failed to load accounts from database:", err);
+      throw err;
+    }
 
     // Build new data in temporary variables first to avoid race condition
     const newPrefixCache = new Map<string, CachedByokAccount[]>();
@@ -170,7 +179,8 @@ export class ByokProvider extends BaseProvider {
     try {
       const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
       return obj as ByokTokens;
-    } catch {
+    } catch (err) {
+      console.warn("[BYOK] Failed to parse tokens JSON:", err);
       return null;
     }
   }
@@ -182,8 +192,9 @@ export class ByokProvider extends BaseProvider {
   private getApiKey(account: Account): string {
     try {
       return decrypt(account.password);
-    } catch {
+    } catch (err) {
       // Fallback: try tokens.api_key (shouldn't happen, but defensive)
+      console.warn(`[BYOK] Failed to decrypt password for account ${account.id}:`, err);
       const tokens = this.parseTokens(account.tokens);
       return tokens?.api_key || "";
     }
@@ -220,7 +231,9 @@ export class ByokProvider extends BaseProvider {
   /** Public async helper for account-pool setting lookup. */
   findPrefixForModel(model: string): string | null {
     if (Date.now() >= this.cacheExpiry) {
-      this.refreshCache().catch(() => {/* swallow — next call will retry */});
+      this.refreshCache().catch((err) => {
+        console.warn("[BYOK] Background cache refresh failed in findPrefixForModel:", err);
+      });
     }
     return this.findPrefix(model);
   }
@@ -236,7 +249,9 @@ export class ByokProvider extends BaseProvider {
     // prefixes so requests don't fall through to the fallback provider (Kiro).
     if (Date.now() >= this.cacheExpiry) {
       // Fire-and-forget: refresh in background, don't block routing
-      this.refreshCache().catch(() => {/* swallow — next call will retry */});
+      this.refreshCache().catch((err) => {
+        console.warn("[BYOK] Background cache refresh failed in ownsModel:", err);
+      });
     }
     return this.findPrefix(model) !== null;
   }
@@ -252,7 +267,13 @@ export class ByokProvider extends BaseProvider {
   ): Promise<Account | null> {
     await this.ensureCache();
     const prefix = this.findPrefix(model);
-    if (!prefix) return null;
+    if (!prefix) {
+      console.warn(
+        `[BYOK] No prefix matches model "${model}" ` +
+          `(known prefixes: ${this.prefixes.join(", ") || "none"})`
+      );
+      return null;
+    }
 
     const actualModel = this.extractModel(model, prefix);
     const entries = this.prefixCache.get(prefix) || [];
@@ -272,7 +293,19 @@ export class ByokProvider extends BaseProvider {
       );
     }
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) {
+      const total = entries.length;
+      const enabled = entries.filter((e) => e.account.enabled).length;
+      const activeForModel = entries.filter(
+        (e) => e.account.enabled && e.account.status === "active" && supportsModel(e)
+      ).length;
+      console.warn(
+        `[BYOK] No candidate account for model "${model}" ` +
+          `(prefix: ${prefix}, actualModel: ${actualModel}, ` +
+          `total keys: ${total}, enabled: ${enabled}, active+supportsModel: ${activeForModel})`
+      );
+      return null;
+    }
     return this.selectAccount(prefix, candidates, options).account;
   }
 

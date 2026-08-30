@@ -9,15 +9,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Auto-detect project dir: env override > script dir
+# Auto-detect project dir: env override > checkout script > default install dir
 if ($env:POOLPROX_HOME -and (Test-Path $env:POOLPROX_HOME)) {
   $ProjectDir = $env:POOLPROX_HOME
-} else {
+} elseif (Test-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "scripts\production.ts")) {
   $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+  $ProjectDir = Join-Path $HOME "etteum-pool"
+}
+
+if (-not (Test-Path (Join-Path $ProjectDir "scripts\production.ts"))) {
+  throw "Etteum project not found at $ProjectDir. Set POOLPROX_HOME to the checkout path."
 }
 
 $PidFile = Join-Path $ProjectDir ".etteum.pid"
 $LogFile = Join-Path $ProjectDir ".etteum.log"
+$ErrorLogFile = Join-Path $ProjectDir ".etteum.error.log"
 $EnvFile = Join-Path $ProjectDir ".env"
 
 function Get-EnvValue([string]$key, [string]$default) {
@@ -62,7 +69,7 @@ function Invoke-Start {
 
   Write-Host "Starting Etteum..."
   $proc = Start-Process -FilePath "bun" -ArgumentList "scripts/production.ts","--skip-build" `
-    -WorkingDirectory $ProjectDir -RedirectStandardOutput $LogFile -RedirectStandardError $LogFile `
+    -WorkingDirectory $ProjectDir -RedirectStandardOutput $LogFile -RedirectStandardError $ErrorLogFile `
     -WindowStyle Hidden -PassThru
   $proc.Id | Out-File -FilePath $PidFile -Encoding ascii
   Start-Sleep -Seconds 1
@@ -76,6 +83,7 @@ function Invoke-Start {
     Remove-Item $PidFile -ErrorAction SilentlyContinue
     Write-Host "Failed to start. Check logs at $LogFile" -ForegroundColor Red
     Get-Content $LogFile -Tail 5 -ErrorAction SilentlyContinue
+    Get-Content $ErrorLogFile -Tail 5 -ErrorAction SilentlyContinue
   }
 }
 

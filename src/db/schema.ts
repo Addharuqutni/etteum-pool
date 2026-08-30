@@ -2,7 +2,7 @@ import { sqliteTable, text, real, integer, uniqueIndex, index } from "drizzle-or
 
 export const accounts = sqliteTable("accounts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  provider: text("provider").notNull(), // kiro | codebuddy | canva
+  provider: text("provider").notNull(), // codebuddy | canva | codex | ...
   email: text("email").notNull(),
   password: text("password").notNull(), // encrypted
   status: text("status").notNull().default("pending"), // active | exhausted | error | pending
@@ -11,9 +11,8 @@ export const accounts = sqliteTable("accounts", {
   quotaLimit: real("quota_limit").default(0),
   quotaRemaining: real("quota_remaining").default(0),
   quotaResetAt: integer("quota_reset_at", { mode: "timestamp" }),
-  // Qoder Free counter — mirror of /activity bucket qmodel_latest (Qwen3.7-Max promo).
-  // Decremented per-request when the model maps to qmodel_latest (e.g. qd-Qwen3.7-Max).
-  // Re-synced from Qoder by warmup; Qoder is source of truth on every override.
+  // Free-quota counter (legacy Qoder free bucket; columns kept for schema
+  // stability — no longer decremented by the proxy after Qoder removal).
   freeLimit: real("free_limit").default(0),
   freeRemaining: real("free_remaining").default(0),
   freeResetAt: integer("free_reset_at", { mode: "timestamp" }),
@@ -24,7 +23,7 @@ export const accounts = sqliteTable("accounts", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 }, (table) => [
-  // Email must be unique PER provider (same email can exist for kiro + codebuddy + canva)
+  // Email must be unique PER provider (same email can exist for codebuddy + canva + codex)
   uniqueIndex("accounts_provider_email_idx").on(table.provider, table.email),
 ]);
 
@@ -184,12 +183,25 @@ export const modelMappings = sqliteTable("model_mappings", {
   targetModel: text("target_model").notNull().default(""), // model id available in the pool
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   priority: integer("priority").notNull().default(0), // lower = evaluated first
-  label: text("label"), // optional human label e.g. "Claude Code · Haiku"
+  label: text("label"), // optional human label e.g. "the assistant · Haiku"
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 }, (table) => [
   index("model_mappings_priority_idx").on(table.priority),
 ]);
+
+// Virtual "combo" models: client-facing name that falls back across an ordered
+// list of real target models. created_at/updated_at are ISO-8601 strings (the
+// API contract exposes them as string timestamps), matching the runtime
+// CREATE TABLE in src/proxy/combos.ts.
+export const combos = sqliteTable("combos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(), // exact-match resolution key
+  targets: text("targets").notNull(), // JSON array of 1..10 real model ids, tried in order
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 
 // Type exports
 export type Account = typeof accounts.$inferSelect;
@@ -213,3 +225,5 @@ export type FilterRule = typeof filterRules.$inferSelect;
 export type NewFilterRule = typeof filterRules.$inferInsert;
 export type ModelMapping = typeof modelMappings.$inferSelect;
 export type NewModelMapping = typeof modelMappings.$inferInsert;
+export type Combo = typeof combos.$inferSelect;
+export type NewCombo = typeof combos.$inferInsert;

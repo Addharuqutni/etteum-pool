@@ -9,8 +9,11 @@ import { loginQueue } from "../auth/queue";
 import { warmupQueue } from "../auth/warmup-queue";
 import { warmupAccount } from "../auth/warmup-runner";
 import { pool, type ProviderName } from "../proxy/pool";
-import { activateQoderPat } from "../proxy/providers/qoder";
-import { activateYouMindKey } from "../proxy/providers/youmind";
+import {
+  exchangeClaudeAuthorizationCode,
+  fetchClaudeProfile,
+  type ClaudeTokens,
+} from "../proxy/providers/claude";
 
 export const accountsRouter = new Hono();
 
@@ -44,7 +47,8 @@ function parseByokTokens(raw: unknown): ByokTokensShape {
   if (!raw) return {};
   try {
     return (typeof raw === "string" ? JSON.parse(raw) : raw) as ByokTokensShape;
-  } catch {
+  } catch (err) {
+    console.warn("[API accounts] Failed to parse BYOK tokens JSON:", err);
     return {};
   }
 }
@@ -147,16 +151,22 @@ accountsRouter.get("/warmup-queue", (c) => {
  * GET /api/accounts - List all accounts
  */
 accountsRouter.get("/", async (c) => {
-  const allAccounts = await db.select().from(accounts);
+  try {
+    const allAccounts = await db.select().from(accounts);
 
-  // Don't expose passwords in response
-  const sanitized = allAccounts.map((acc) => ({
-    ...acc,
-    password: "***",
-    tokens: acc.tokens ? "[set]" : null,
-  }));
+    // Don't expose passwords in response
+    const sanitized = allAccounts.map((acc) => ({
+      ...acc,
+      password: "***",
+      tokens: acc.tokens ? "[set]" : null,
+    }));
 
-  return c.json({ data: sanitized, total: sanitized.length });
+    return c.json({ data: sanitized, total: sanitized.length });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to list accounts:", error);
+    return c.json({ error: `Failed to list accounts: ${msg}` }, 500);
+  }
 });
 
 /**
@@ -201,7 +211,14 @@ accountsRouter.post("/byok", async (c) => {
     return c.json({ error: "At least one API key is required" }, 400);
   }
 
-  const existingByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  let existingByok;
+  try {
+    existingByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to check existing BYOK providers:", error);
+    return c.json({ error: `Failed to check existing providers: ${msg}` }, 500);
+  }
   if (existingByok.some((acc) => getByokPrefix(acc) === label)) {
     return c.json({ error: "BYOK provider with this label already exists" }, 409);
   }
@@ -249,7 +266,9 @@ accountsRouter.post("/byok", async (c) => {
       models: models.map((m) => `${label}-${m}`),
     }, 201);
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to create BYOK provider:", error);
+    return c.json({ error: `Failed to create BYOK provider: ${msg}` }, 500);
   }
 });
 
@@ -257,91 +276,167 @@ accountsRouter.post("/byok", async (c) => {
  * GET /api/accounts/byok - List BYOK provider groups with masked key metadata.
  */
 accountsRouter.get("/byok", async (c) => {
-  const byokAccounts = await db.select().from(accounts)
-    .where(eq(accounts.provider, "byok"));
+  try {
+    const byokAccounts = await db.select().from(accounts)
+      .where(eq(accounts.provider, "byok"));
 
-  const lbMethods = await getByokLbMethods(Array.from(new Set(byokAccounts.map((acc) => getByokPrefix(acc)))));
+    const lbMethods = await getByokLbMethods(Array.from(new Set(byokAccounts.map((acc) => getByokPrefix(acc)))));
 
-  const groups = new Map<string, {
-    id: number;
-    label: string;
-    base_url: string;
-    format: "openai" | "anthropic" | "auto";
-    models: string[];
-    model_prefix: string;
-    headers?: Record<string, string>;
-    status: string;
-    enabled: boolean;
-    available_models: string[];
-    key_count: number;
-    active_key_count: number;
-    load_balancing_method: string;
-    keys: Array<{
+    const groups = new Map<string, {
       id: number;
       label: string;
+      base_url: string;
+      format: "openai" | "anthropic" | "auto";
+      models: string[];
+      model_prefix: string;
+      headers?: Record<string, string>;
       status: string;
       enabled: boolean;
-      weight?: number;
-      priority?: number;
-      lastUsedAt?: Date | null;
-      errorMessage?: string | null;
-    }>;
-  }>();
+      available_models: string[];
+      key_count: number;
+      active_key_count: number;
+      load_balancing_method: string;
+      keys: Array<{
+        id: number;
+        label: string;
+        status: string;
+        enabled: boolean;
+        weight?: number;
+        priority?: number;
+        lastUsedAt?: Date | null;
+        errorMessage?: string | null;
+      }>;
+    }>();
 
-  for (const acc of byokAccounts) {
-    const tokens = parseByokTokens(acc.tokens);
-    const prefix = tokens.model_prefix || getByokPrefix(acc);
-    const keyLabel = getByokKeyLabel(acc);
-    const models = normalizeModels(tokens.models || []);
-    const existing = groups.get(prefix);
+    for (const acc of byokAccounts) {
+      const tokens = parseByokTokens(acc.tokens);
+      const prefix = tokens.model_prefix || getByokPrefix(acc);
+      const keyLabel = getByokKeyLabel(acc);
+      const models = normalizeModels(tokens.models || []);
+      const existing = groups.get(prefix);
 
-    if (!existing) {
-      groups.set(prefix, {
+      if (!existing) {
+        groups.set(prefix, {
+          id: acc.id,
+          label: prefix,
+          base_url: tokens.base_url || "",
+          format: tokens.format || "auto",
+          models,
+          model_prefix: prefix,
+          headers: tokens.headers || {},
+          status: acc.status,
+          enabled: Boolean(acc.enabled),
+          available_models: models.map((m) => `${prefix}-${m}`),
+          key_count: 0,
+          active_key_count: 0,
+          load_balancing_method: lbMethods.get(prefix) || tokens.load_balancing_method || "round_robin",
+          keys: [],
+        });
+      } else {
+        const modelSet = new Set(existing.models);
+        for (const model of models) modelSet.add(model);
+        existing.models = Array.from(modelSet);
+        existing.available_models = existing.models.map((m) => `${prefix}-${m}`);
+        existing.enabled = existing.enabled || Boolean(acc.enabled);
+        existing.status = existing.status === "active" || acc.status !== "active" ? existing.status : "active";
+      }
+
+      const group = groups.get(prefix)!;
+      group.key_count += 1;
+      if (acc.enabled && acc.status === "active") group.active_key_count += 1;
+      group.keys.push({
         id: acc.id,
-        label: prefix,
-        base_url: tokens.base_url || "",
-        format: tokens.format || "auto",
-        models,
-        model_prefix: prefix,
-        headers: tokens.headers || {},
+        label: keyLabel,
         status: acc.status,
         enabled: Boolean(acc.enabled),
-        available_models: models.map((m) => `${prefix}-${m}`),
-        key_count: 0,
-        active_key_count: 0,
-        load_balancing_method: lbMethods.get(prefix) || tokens.load_balancing_method || "round_robin",
-        keys: [],
+        weight: tokens.weight,
+        priority: tokens.priority,
+        lastUsedAt: acc.lastUsedAt,
+        errorMessage: acc.errorMessage,
       });
-    } else {
-      const modelSet = new Set(existing.models);
-      for (const model of models) modelSet.add(model);
-      existing.models = Array.from(modelSet);
-      existing.available_models = existing.models.map((m) => `${prefix}-${m}`);
-      existing.enabled = existing.enabled || Boolean(acc.enabled);
-      existing.status = existing.status === "active" || acc.status !== "active" ? existing.status : "active";
     }
 
-    const group = groups.get(prefix)!;
-    group.key_count += 1;
-    if (acc.enabled && acc.status === "active") group.active_key_count += 1;
-    group.keys.push({
-      id: acc.id,
-      label: keyLabel,
-      status: acc.status,
-      enabled: Boolean(acc.enabled),
-      weight: tokens.weight,
-      priority: tokens.priority,
-      lastUsedAt: acc.lastUsedAt,
-      errorMessage: acc.errorMessage,
-    });
+    const providers = Array.from(groups.values()).map((group) => ({
+      ...group,
+      keys: group.keys.sort((a, b) => (Number(a.priority ?? 9999) - Number(b.priority ?? 9999)) || a.id - b.id),
+    })).sort((a, b) => a.label.localeCompare(b.label));
+
+    return c.json({ providers, total: providers.length });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to list BYOK providers:", error);
+    return c.json({ error: `Failed to list BYOK providers: ${msg}` }, 500);
+  }
+});
+
+/**
+ * POST /api/accounts/byok/fetch-models - Probe an upstream base_url + api_key
+ * (OpenAI or Anthropic compatible) and return the model IDs it advertises.
+ *
+ * Body: { base_url, api_key, format?, headers? }
+ * Response: { models: string[] } (sorted, deduped)
+ *
+ * Never persists anything — it is a pure "what models does this key see?"
+ * lookup used by the dashboard to pre-fill the BYOK model list.
+ */
+accountsRouter.post("/byok/fetch-models", async (c) => {
+  const body = await c.req.json<{
+    base_url?: string;
+    api_key?: string;
+    format?: "openai" | "anthropic" | "auto";
+    headers?: Record<string, string>;
+  }>();
+
+  const baseUrl = String(body.base_url || "").trim().replace(/\/$/, "");
+  const apiKey = String(body.api_key || "").trim();
+  if (!baseUrl || !apiKey) {
+    return c.json({ error: "base_url and api_key are required" }, 400);
+  }
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    return c.json({ error: "base_url must start with http:// or https://" }, 400);
   }
 
-  const providers = Array.from(groups.values()).map((group) => ({
-    ...group,
-    keys: group.keys.sort((a, b) => (Number(a.priority ?? 9999) - Number(b.priority ?? 9999)) || a.id - b.id),
-  })).sort((a, b) => a.label.localeCompare(b.label));
+  const format = body.format === "anthropic" ? "anthropic" : "openai";
+  const upstreamHeaders: Record<string, string> = { ...(body.headers || {}) };
+  if (format === "anthropic") {
+    upstreamHeaders["x-api-key"] = apiKey;
+    upstreamHeaders["anthropic-version"] = "2023-06-01";
+  } else {
+    upstreamHeaders["Authorization"] = `Bearer ${apiKey}`;
+  }
 
-  return c.json({ providers, total: providers.length });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/models`, {
+      method: "GET",
+      headers: { Accept: "application/json", ...upstreamHeaders },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.warn(`[API accounts] fetch-models failed for ${baseUrl}:`, error);
+    return c.json({ error: `Failed to reach upstream: ${msg}` }, 502);
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.warn(`[API accounts] fetch-models upstream ${res.status} for ${baseUrl}: ${text.slice(0, 200)}`);
+    return c.json({ error: `Upstream returned ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}` }, 502);
+  }
+
+  let data: Array<{ id?: unknown }> = [];
+  try {
+    const json = (await res.json()) as { data?: Array<{ id?: unknown }> };
+    if (json && Array.isArray(json.data)) data = json.data;
+  } catch (error) {
+    return c.json({ error: "Upstream returned an unparseable response" }, 502);
+  }
+
+  const models = Array.from(
+    new Set(data.map((m) => String(m?.id ?? "").trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  return c.json({ models });
 });
 
 /**
@@ -355,7 +450,14 @@ accountsRouter.post("/byok/:id/reveal", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) return c.json({ error: "Invalid BYOK key id" }, 400);
 
-  const account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
+  let account;
+  try {
+    account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to fetch BYOK key for reveal:", error);
+    return c.json({ error: `Failed to fetch BYOK key: ${msg}` }, 500);
+  }
   if (!account || account.provider !== "byok") {
     return c.json({ error: "BYOK key not found" }, 404);
   }
@@ -368,7 +470,9 @@ accountsRouter.post("/byok/:id/reveal", async (c) => {
       key: decrypt(account.password),
     });
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "Failed to decrypt BYOK key" }, 500);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to decrypt BYOK key:", error);
+    return c.json({ error: `Failed to decrypt BYOK key: ${msg}` }, 500);
   }
 });
 
@@ -389,16 +493,30 @@ accountsRouter.patch("/byok/:id", async (c) => {
     load_balancing_method?: "round_robin" | "sequential" | "least_inflight";
   }>();
 
-  const account = await db.select().from(accounts)
-    .where(eq(accounts.id, id))
-    .get();
+  let account;
+  try {
+    account = await db.select().from(accounts)
+      .where(eq(accounts.id, id))
+      .get();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch BYOK account ${id} for update:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account || account.provider !== "byok") {
     return c.json({ error: "BYOK provider not found" }, 404);
   }
 
   const prefix = getByokPrefix(account);
-  const allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  let allByok;
+  try {
+    allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to fetch BYOK group accounts:", error);
+    return c.json({ error: `Failed to fetch BYOK accounts: ${msg}` }, 500);
+  }
   const groupAccounts = allByok.filter((acc) => getByokPrefix(acc) === prefix);
   const currentTokens = parseByokTokens(account.tokens);
   const nextBaseUrl = body.base_url?.trim().replace(/\/$/, "") || currentTokens.base_url || "";
@@ -504,7 +622,9 @@ accountsRouter.patch("/byok/:id", async (c) => {
       models: nextModels.map((m) => `${prefix}-${m}`),
     });
   } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to update BYOK provider ${id}:`, error);
+    return c.json({ error: `Failed to update BYOK provider: ${msg}` }, 500);
   }
 });
 
@@ -513,27 +633,40 @@ accountsRouter.patch("/byok/:id", async (c) => {
  */
 accountsRouter.delete("/byok/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
+  let account;
+  try {
+    account = await db.select().from(accounts).where(eq(accounts.id, id)).get();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch BYOK account ${id} for delete:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account || account.provider !== "byok") {
     return c.json({ error: "BYOK provider not found" }, 404);
   }
 
   const prefix = getByokPrefix(account);
-  const allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
-  const groupAccounts = allByok.filter((acc) => getByokPrefix(acc) === prefix);
-  const deletedIds: number[] = [];
+  try {
+    const allByok = await db.select().from(accounts).where(eq(accounts.provider, "byok"));
+    const groupAccounts = allByok.filter((acc) => getByokPrefix(acc) === prefix);
+    const deletedIds: number[] = [];
 
-  for (const acc of groupAccounts) {
-    await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, acc.id));
-    const result = await db.delete(accounts).where(eq(accounts.id, acc.id)).returning();
-    if (result[0]) deletedIds.push(result[0].id);
+    for (const acc of groupAccounts) {
+      await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, acc.id));
+      const result = await db.delete(accounts).where(eq(accounts.id, acc.id)).returning();
+      if (result[0]) deletedIds.push(result[0].id);
+    }
+
+    await refreshByokRuntime();
+    broadcast({ type: "byok_deleted", data: { id, label: prefix, deletedIds } });
+
+    return c.json({ success: true, deleted: id, deletedIds, label: prefix });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to delete BYOK provider ${id}:`, error);
+    return c.json({ error: `Failed to delete BYOK provider: ${msg}` }, 500);
   }
-
-  await refreshByokRuntime();
-  broadcast({ type: "byok_deleted", data: { id, label: prefix, deletedIds } });
-
-  return c.json({ success: true, deleted: id, deletedIds, label: prefix });
 });
 
 /**
@@ -569,33 +702,50 @@ accountsRouter.post("/byok/:id/test", async (c) => {
   const id = Number(c.req.param("id"));
   const reqBody = await c.req.json().catch(() => ({})) as { model?: string };
 
-  const account = await db.select().from(accounts)
-    .where(eq(accounts.id, id))
-    .get();
+  let account;
+  try {
+    account = await db.select().from(accounts)
+      .where(eq(accounts.id, id))
+      .get();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to fetch BYOK account for test:", error);
+    return c.json({ success: false, error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account || account.provider !== "byok") {
     return c.json({ error: "BYOK provider not found" }, 404);
   }
 
-  const tokens = typeof account.tokens === "string"
-    ? JSON.parse(account.tokens)
-    : account.tokens;
-
-  if (!tokens?.base_url || !tokens?.models || tokens.models.length === 0) {
-    return c.json({ success: false, error: "Invalid BYOK configuration" });
+  let tokens: any;
+  try {
+    tokens = typeof account.tokens === "string"
+      ? JSON.parse(account.tokens)
+      : account.tokens;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to parse BYOK tokens for account ${id}:`, error);
+    return c.json({ success: false, error: `Corrupt BYOK tokens: ${msg}` }, 500);
   }
 
-  const apiKey = decrypt(account.password);
+  if (!tokens?.base_url || !tokens?.models || tokens.models.length === 0) {
+    return c.json({ success: false, error: "Invalid BYOK configuration: missing base_url or models" }, 400);
+  }
+
+  let apiKey: string;
+  try {
+    apiKey = decrypt(account.password);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to decrypt BYOK key for account ${id}:`, error);
+    return c.json({ success: false, error: `Failed to decrypt API key: ${msg}` }, 500);
+  }
   const format = tokens.format || "auto";
   const testModel = reqBody.model || tokens.models[0];
 
-  // Validate model if provided
-  if (reqBody.model && !tokens.models.includes(reqBody.model)) {
-    return c.json({
-      success: false,
-      error: `Model "${reqBody.model}" not found in provider configuration`
-    }, 400);
-  }
+  // Any model id may be tested — including ones discovered via /models that
+  // are not in the routing list yet. Unknown models surface as the remote
+  // API's own error, which is exactly what a test should report.
 
   // Determine endpoint based on format
   const isAnthropic = format === "anthropic" ||
@@ -825,8 +975,9 @@ export async function createGitlabDuoAccount(
     const sm = json.data?.aiChatAvailableModels?.selectableModels;
     if (dm?.ref) defaultModel = dm.ref;
     if (Array.isArray(sm)) availableModels = sm;
-  } catch {
+  } catch (err) {
     // Non-fatal — fall back to bundled defaults.
+    console.warn("[GitLab Duo] Failed to fetch available models:", err);
   }
 
   const label = input.label?.trim() || username;
@@ -892,8 +1043,9 @@ export async function createGitlabDuoAccount(
       const endDate = trial?.activeTrial?.endDate ? new Date(trial.activeTrial.endDate) : null;
       if (endDate && !isNaN(endDate.getTime())) quotaResetAt = endDate;
     }
-  } catch {
+  } catch (err) {
     // Non-fatal: leave quota at 0/0; the periodic warmup will fill it later.
+    console.warn("[GitLab Duo] Failed to fetch quota:", err);
   }
 
   // 4. Insert OR update existing pending row (bot path).
@@ -1001,23 +1153,29 @@ accountsRouter.post("/gitlab-duo", async (c) => {
     gmail_password?: string;
     gmailPassword?: string;
   }>();
-  const result = await createGitlabDuoAccount({
-    gitlabBaseUrl: body.gitlab_base_url ?? body.gitlabBaseUrl,
-    pat: body.pat,
-    label: body.label,
-    gmailEmail: body.gmail_email ?? body.gmailEmail,
-    gmailPassword: body.gmail_password ?? body.gmailPassword,
-  });
-  if (!result.ok) return c.json({ error: result.error }, result.status as any);
-  return c.json({
-    success: true,
-    id: result.id,
-    label: result.label,
-    username: result.username,
-    namespacePath: result.namespacePath,
-    defaultModel: result.defaultModel,
-    modelsCount: result.modelsCount,
-  }, 201);
+  try {
+    const result = await createGitlabDuoAccount({
+      gitlabBaseUrl: body.gitlab_base_url ?? body.gitlabBaseUrl,
+      pat: body.pat,
+      label: body.label,
+      gmailEmail: body.gmail_email ?? body.gmailEmail,
+      gmailPassword: body.gmail_password ?? body.gmailPassword,
+    });
+    if (!result.ok) return c.json({ error: result.error }, result.status as any);
+    return c.json({
+      success: true,
+      id: result.id,
+      label: result.label,
+      username: result.username,
+      namespacePath: result.namespacePath,
+      defaultModel: result.defaultModel,
+      modelsCount: result.modelsCount,
+    }, 201);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to create GitLab Duo account:", error);
+    return c.json({ error: `Failed to create GitLab Duo account: ${msg}` }, 500);
+  }
 });
 
 /**
@@ -1027,18 +1185,45 @@ accountsRouter.post("/gitlab-duo", async (c) => {
  */
 accountsRouter.post("/gitlab-duo/:id/refresh", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db.select().from(accounts).where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db.select().from(accounts).where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to fetch account for GitLab Duo refresh:", error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
   if (!account || account.provider !== "gitlab-duo") {
     return c.json({ error: "Not a GitLab Duo account" }, 404);
   }
 
-  const tokens = (typeof account.tokens === "string"
-    ? JSON.parse(account.tokens)
-    : account.tokens) as { gitlabBaseUrl: string; namespaceId?: number };
-  const oldMeta = (typeof account.metadata === "string"
-    ? JSON.parse(account.metadata)
-    : account.metadata) ?? {};
-  const pat = decrypt(account.password);
+  let tokens: { gitlabBaseUrl: string; namespaceId?: number };
+  try {
+    tokens = (typeof account.tokens === "string"
+      ? JSON.parse(account.tokens)
+      : account.tokens) as { gitlabBaseUrl: string; namespaceId?: number };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to parse GitLab Duo tokens for account ${id}:`, error);
+    return c.json({ error: `Corrupt account tokens: ${msg}` }, 500);
+  }
+  let oldMeta: Record<string, unknown>;
+  try {
+    oldMeta = (typeof account.metadata === "string"
+      ? JSON.parse(account.metadata)
+      : account.metadata) ?? {};
+  } catch (err) {
+    console.warn(`[API accounts] Failed to parse metadata for account ${id}:`, err);
+    oldMeta = {};
+  }
+  let pat: string;
+  try {
+    pat = decrypt(account.password);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to decrypt GitLab Duo PAT for account ${id}:`, error);
+    return c.json({ error: `Failed to decrypt PAT: ${msg}` }, 500);
+  }
   const baseUrl = tokens.gitlabBaseUrl;
 
   const headers = {
@@ -1125,8 +1310,9 @@ accountsRouter.post("/gitlab-duo/:id/refresh", async (c) => {
           if (probe.quota.resetAt instanceof Date) quotaResetAt = probe.quota.resetAt;
         }
       }
-    } catch {
+    } catch (err) {
       // Non-fatal — keep stored quota values.
+      console.warn(`[GitLab Duo] Quota probe failed for account ${id}:`, err);
     }
 
     await db.update(accounts)
@@ -1164,10 +1350,17 @@ accountsRouter.post("/gitlab-duo/:id/refresh", async (c) => {
  */
 accountsRouter.get("/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id}:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account) {
     return c.json({ error: "Account not found" }, 404);
@@ -1191,6 +1384,10 @@ accountsRouter.post("/", async (c) => {
     personalToken?: string;
     apiKey?: string; // YouMind sk-ym-... key
     apiKeys?: string; // CodeBuddy China bulk: newline-separated ck_... keys
+    accessToken?: string; // CodeBuddy global/CN: OAuth access_token (JWT)
+    access_token?: string; // snake_case alias for accessToken
+    refresh_token?: string; // snake_case alias for tokens.refresh_token
+    uid?: string; // CodeBuddy global/CN: Keycloak user id (optional, else from JWT sub)
     tokens?: Record<string, unknown>;
     status?: "active" | "pending";
     browserEngine?: string;
@@ -1201,102 +1398,48 @@ accountsRouter.post("/", async (c) => {
     return c.json({ error: "provider is required" }, 400);
   }
 
-  if (body.provider === "qoder" && body.personalToken) {
-    const trimmed = body.personalToken.trim();
-    if (!trimmed) return c.json({ error: "personalToken is empty" }, 400);
-
-    try {
-      const { tokens, jobToken } = await activateQoderPat(trimmed);
-      const email = jobToken.email || jobToken.name || `qoder-${tokens.userId || Date.now()}@pat`;
-
-      const existing = await db.select().from(accounts)
-        .where(eq(accounts.email, email))
-        .then((rows) => rows.find((r) => r.provider === "qoder"));
-
-      if (existing) {
-        await db.update(accounts).set({
-          status: "active",
-          tokens: tokens as unknown,
-          errorMessage: null,
-          lastLoginAt: new Date(),
-          updatedAt: new Date(),
-        }).where(eq(accounts.id, existing.id));
-        pool.invalidate("qoder");
-        broadcast({ type: "account_updated", data: { id: existing.id, provider: "qoder", status: "active" } });
-        return c.json({ id: existing.id, provider: "qoder", email, status: "active", updated: true }, 200);
-      }
-
-      const inserted = await db.insert(accounts).values({
-        provider: "qoder",
-        email,
-        password: encrypt("pat-login"),
-        status: "active",
-        tokens: tokens as unknown,
-        lastLoginAt: new Date(),
-      }).returning();
-      const created = inserted[0]!;
-      pool.invalidate("qoder");
-      broadcast({ type: "account_created", data: { id: created.id, provider: "qoder", email } });
-      return c.json({ ...created, password: "***", tokens: "[set]" }, 201);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      return c.json({ error: `Qoder PAT activation failed: ${msg}` }, 400);
+  // ── CodeBuddy China: Single API key flow (ck_...) ────────────────────
+  // Accept a single API key, validate format, and create one account with
+  // an auto-generated email label.
+  if (body.provider === "codebuddy-china" && body.apiKey) {
+    const key = body.apiKey.trim();
+    if (!key) return c.json({ error: "apiKey is empty" }, 400);
+    if (!key.startsWith("ck_")) {
+      return c.json({ error: `Invalid API key format: ${key.substring(0, 20)}... (must start with ck_)` }, 400);
     }
-  }
 
-  // ── YouMind: API key paste flow (sk-ym-...) ────────────────────────
-  // Mirrors the Qoder PAT branch above: validate the key against YouMind's
-  // OpenAPI relay, derive a stable email-like label from the user's space_id,
-  // then upsert by (provider, email) so re-pasting the same key updates the
-  // existing row instead of erroring on the unique-index conflict.
-  if (body.provider === "youmind" && body.apiKey) {
-    const trimmed = body.apiKey.trim();
-    if (!trimmed) return c.json({ error: "apiKey is empty" }, 400);
+    const encryptedKey = encrypt(key);
+    const tokens = JSON.stringify({ api_key: key });
+
+    // Generate a unique email label that doesn't collide with existing accounts.
+    const existingEmails = await db.select({ email: accounts.email }).from(accounts)
+      .where(eq(accounts.provider, "codebuddy-china"))
+      .then((rows) => new Set(rows.map((r) => r.email)));
+    let suffix = 1;
+    let email = `cbc-account-${suffix}`;
+    while (existingEmails.has(email)) {
+      suffix++;
+      email = `cbc-account-${suffix}`;
+    }
 
     try {
-      const { email, metadata } = await activateYouMindKey(trimmed);
-      const encryptedKey = encrypt(trimmed);
-
-      const existing = await db.select().from(accounts)
-        .where(eq(accounts.email, email))
-        .then((rows) => rows.find((r) => r.provider === "youmind"));
-
-      if (existing) {
-        await db.update(accounts).set({
-          password: encryptedKey,
-          status: "active",
-          tokens: null,
-          metadata: metadata as unknown,
-          errorMessage: null,
-          lastLoginAt: new Date(),
-          updatedAt: new Date(),
-        }).where(eq(accounts.id, existing.id));
-        pool.invalidate("youmind");
-        broadcast({ type: "account_updated", data: { id: existing.id, provider: "youmind", status: "active" } });
-        return c.json({ id: existing.id, provider: "youmind", email, status: "active", updated: true }, 200);
-      }
-
       const inserted = await db.insert(accounts).values({
-        provider: "youmind",
+        provider: "codebuddy-china",
         email,
         password: encryptedKey,
         status: "active",
-        tokens: null,
-        metadata: metadata as unknown,
-        // YouMind doesn't expose per-account credit numbers via OpenAPI; use
-        // -1 sentinel ("unlimited / unknown") so the warmup runner won't flip
-        // the account to exhausted on a real positive limit.
+        tokens,
         quotaLimit: -1,
         quotaRemaining: -1,
         lastLoginAt: new Date(),
       }).returning();
       const created = inserted[0]!;
-      pool.invalidate("youmind");
-      broadcast({ type: "account_created", data: { id: created.id, provider: "youmind", email } });
-      return c.json({ ...created, password: "***", tokens: null }, 201);
+      pool.invalidate("codebuddy-china" as any);
+      broadcast({ type: "account_created", data: { id: created.id, provider: "codebuddy-china", email } });
+      return c.json({ ...created, password: "***", tokens: "[set]" }, 201);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      return c.json({ error: `YouMind API key activation failed: ${msg}` }, 400);
+      return c.json({ error: `Failed to create CodeBuddy China account: ${msg}` }, 500);
     }
   }
 
@@ -1321,20 +1464,95 @@ accountsRouter.post("/", async (c) => {
     }
 
     const created: Array<{ id: number; email: string }> = [];
-    const existingCount = await db.select().from(accounts)
-      .where(eq(accounts.provider, "codebuddy-china"))
-      .then((rows) => rows.length);
+    let existingEmails: Set<string>;
+    try {
+      existingEmails = await db.select({ email: accounts.email }).from(accounts)
+        .where(eq(accounts.provider, "codebuddy-china"))
+        .then((rows) => new Set(rows.map((r) => r.email)));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[API accounts] Failed to query existing CodeBuddy China accounts:", error);
+      return c.json({ error: `Failed to query existing accounts: ${msg}` }, 500);
+    }
+    const existingCount = existingEmails.size;
 
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i]!;
-      const email = `cbc-account-${existingCount + i + 1}`;
-      const encryptedKey = encrypt(key);
+    try {
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]!;
+        const encryptedKey = encrypt(key);
 
-      // Store API key in BOTH password (for encryption) and tokens (for provider to read)
-      const tokens = JSON.stringify({ api_key: key });
+        // Store API key in BOTH password (for encryption) and tokens (for provider to read)
+        const tokens = JSON.stringify({ api_key: key });
 
+        // Generate a unique email label that doesn't collide with existing accounts.
+        // existingCount + i + 1 may collide if accounts were deleted (gaps in numbering),
+        // so we keep incrementing the candidate until we find a free slot.
+        let suffix = existingCount + i + 1;
+        let email = `cbc-account-${suffix}`;
+        while (existingEmails.has(email)) {
+          suffix++;
+          email = `cbc-account-${suffix}`;
+        }
+        existingEmails.add(email);
+
+        const inserted = await db.insert(accounts).values({
+          provider: "codebuddy-china",
+          email,
+          password: encryptedKey,
+          status: "active",
+          tokens,
+          quotaLimit: -1,
+          quotaRemaining: -1,
+          lastLoginAt: new Date(),
+        }).returning();
+
+        if (inserted[0]) {
+          created.push({ id: inserted[0].id, email });
+        }
+      }
+
+      pool.invalidate("codebuddy-china" as any);
+      broadcast({ type: "account_created", data: { provider: "codebuddy-china", count: created.length } });
+
+      return c.json({
+        success: true,
+        count: created.length,
+        accounts: created,
+      }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[API accounts] Failed to bulk create CodeBuddy China accounts:", error);
+      return c.json({ error: `Failed to create accounts: ${msg}` }, 500);
+    }
+  }
+
+  // ── CodeBuddy Global: Single API key flow (ck_...) ───────────────────
+  // Accept a single API key, validate format, and create one account with
+  // an auto-generated email label. Host: www.codebuddy.ai.
+  if (body.provider === "codebuddy" && body.apiKey) {
+    const key = body.apiKey.trim();
+    if (!key) return c.json({ error: "apiKey is empty" }, 400);
+    if (!key.startsWith("ck_")) {
+      return c.json({ error: `Invalid API key format: ${key.substring(0, 20)}... (must start with ck_)` }, 400);
+    }
+
+    const encryptedKey = encrypt(key);
+    const tokens = JSON.stringify({ api_key: key });
+
+    // Generate a unique email label that doesn't collide with existing accounts.
+    const existingEmails = await db.select({ email: accounts.email }).from(accounts)
+      .where(eq(accounts.provider, "codebuddy"))
+      .then((rows) => new Set(rows.map((r) => r.email)));
+    let suffix = 1;
+    let email = `cb-account-${suffix}`;
+    while (existingEmails.has(email)) {
+      suffix++;
+      email = `cb-account-${suffix}`;
+    }
+
+    try {
       const inserted = await db.insert(accounts).values({
-        provider: "codebuddy-china",
+        provider: "codebuddy",
         email,
         password: encryptedKey,
         status: "active",
@@ -1343,20 +1561,140 @@ accountsRouter.post("/", async (c) => {
         quotaRemaining: -1,
         lastLoginAt: new Date(),
       }).returning();
+      const created = inserted[0]!;
+      pool.invalidate("codebuddy" as any);
+      broadcast({ type: "account_created", data: { id: created.id, provider: "codebuddy", email } });
+      return c.json({ ...created, password: "***", tokens: "[set]" }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `Failed to create CodeBuddy account: ${msg}` }, 500);
+    }
+  }
 
-      if (inserted[0]) {
-        created.push({ id: inserted[0].id, email });
+  // ── CodeBuddy Global: Bulk API key flow (ck_...) ─────────────────────
+  // Accept multiple API keys (one per line), validate format, and create
+  // account per key with auto-generated email label.
+  if (body.provider === "codebuddy" && body.apiKeys) {
+    const keys = body.apiKeys
+      .split("\n")
+      .map((k: string) => k.trim())
+      .filter((k: string) => k.length > 0);
+
+    if (keys.length === 0) {
+      return c.json({ error: "apiKeys is empty" }, 400);
+    }
+
+    // Validate format
+    for (const key of keys) {
+      if (!key.startsWith("ck_")) {
+        return c.json({ error: `Invalid API key format: ${key.substring(0, 20)}... (must start with ck_)` }, 400);
       }
     }
 
-    pool.invalidate("codebuddy-china" as any);
-    broadcast({ type: "account_created", data: { provider: "codebuddy-china", count: created.length } });
+    const created: Array<{ id: number; email: string }> = [];
+    let existingEmails: Set<string>;
+    try {
+      existingEmails = await db.select({ email: accounts.email }).from(accounts)
+        .where(eq(accounts.provider, "codebuddy"))
+        .then((rows) => new Set(rows.map((r) => r.email)));
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[API accounts] Failed to query existing CodeBuddy accounts:", error);
+      return c.json({ error: `Failed to query existing accounts: ${msg}` }, 500);
+    }
+    const existingCount = existingEmails.size;
 
-    return c.json({
-      success: true,
-      count: created.length,
-      accounts: created,
-    }, 201);
+    try {
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]!;
+        const encryptedKey = encrypt(key);
+
+        // Store API key in BOTH password (for encryption) and tokens (for provider to read)
+        const tokens = JSON.stringify({ api_key: key });
+
+        // Generate a unique email label that doesn't collide with existing accounts.
+        let suffix = existingCount + i + 1;
+        let email = `cb-account-${suffix}`;
+        while (existingEmails.has(email)) {
+          suffix++;
+          email = `cb-account-${suffix}`;
+        }
+        existingEmails.add(email);
+
+        const inserted = await db.insert(accounts).values({
+          provider: "codebuddy",
+          email,
+          password: encryptedKey,
+          status: "active",
+          tokens,
+          quotaLimit: -1,
+          quotaRemaining: -1,
+          lastLoginAt: new Date(),
+        }).returning();
+
+        if (inserted[0]) {
+          created.push({ id: inserted[0].id, email });
+        }
+      }
+
+      pool.invalidate("codebuddy" as any);
+      broadcast({ type: "account_created", data: { provider: "codebuddy", count: created.length } });
+
+      return c.json({
+        success: true,
+        count: created.length,
+        accounts: created,
+      }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[API accounts] Failed to bulk create CodeBuddy accounts:", error);
+      return c.json({ error: `Failed to create accounts: ${msg}` }, 500);
+    }
+  }
+
+  // ── CodeBuddy Global: import via access_token (OAuth JWT) ────────────
+  // Accept an access_token (JWT) directly, decode email/sub, and upsert the
+  // account. Optional uid overrides the JWT sub; optional refresh_token is
+  // stored for token rotation. This is the manual path alongside the OAuth
+  // device flow (POST /api/oauth/codebuddy/*).
+  if (body.provider === "codebuddy" && (body.accessToken || body.access_token)) {
+    const accessToken = body.accessToken || body.access_token!;
+    try {
+      const connection = await completeCodebuddyOAuthLogin({
+        accessToken,
+        refreshToken: body.refresh_token
+          ?? (body.tokens && typeof body.tokens === "object"
+            ? (body.tokens as Record<string, unknown>).refresh_token as string | null
+            : null),
+        uid: body.uid ?? null,
+      });
+      return c.json({ ...connection, success: true }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `Failed to import CodeBuddy access_token: ${msg}` }, 500);
+    }
+  }
+
+  // ── CodeBuddy China: import via access_token (JWT) + uid ────────────
+  // Accept an access_token (JWT from codebuddy.cn Keycloak), decode email/sub,
+  // and upsert the account. Optional uid overrides the JWT sub; optional
+  // refresh_token is stored for future token rotation.
+  if (body.provider === "codebuddy-china" && (body.accessToken || body.access_token)) {
+    const accessToken = body.accessToken || body.access_token!;
+    try {
+      const connection = await completeCodebuddyChinaOAuthLogin({
+        accessToken,
+        refreshToken: body.refresh_token
+          ?? (body.tokens && typeof body.tokens === "object"
+            ? (body.tokens as Record<string, unknown>).refresh_token as string | null
+            : null),
+        uid: body.uid ?? null,
+      });
+      return c.json({ ...connection, success: true }, 201);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return c.json({ error: `Failed to import CodeBuddy China access_token: ${msg}` }, 500);
+    }
   }
 
   if (!body.email || !body.password) {
@@ -1401,7 +1739,9 @@ accountsRouter.post("/", async (c) => {
     ) {
       return c.json({ error: "Account with this email already exists for this provider" }, 409);
     }
-    throw error;
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to create account:", error);
+    return c.json({ error: `Failed to create account: ${msg}` }, 500);
   }
 });
 
@@ -1580,17 +1920,32 @@ accountsRouter.patch("/:id", async (c) => {
   if (body.status) updateData.status = body.status;
   if (typeof body.enabled === "boolean") updateData.enabled = body.enabled;
   if (body.tokens) updateData.tokens = body.tokens;
-  if (body.password) updateData.password = encrypt(body.password);
+  if (body.password) {
+    try {
+      updateData.password = encrypt(body.password);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`[API accounts] Failed to encrypt password for account ${id}:`, error);
+      return c.json({ error: `Failed to encrypt password: ${msg}` }, 500);
+    }
+  }
   if (body.quotaLimit !== undefined) updateData.quotaLimit = body.quotaLimit;
   if (body.quotaRemaining !== undefined) updateData.quotaRemaining = body.quotaRemaining;
   if (body.quotaResetAt) updateData.quotaResetAt = new Date(body.quotaResetAt);
   if (body.errorMessage !== undefined) updateData.errorMessage = body.errorMessage;
 
-  const result = await db
-    .update(accounts)
-    .set(updateData)
-    .where(eq(accounts.id, id))
-    .returning();
+  let result;
+  try {
+    result = await db
+      .update(accounts)
+      .set(updateData)
+      .where(eq(accounts.id, id))
+      .returning();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to update account ${id}:`, error);
+    return c.json({ error: `Failed to update account: ${msg}` }, 500);
+  }
 
   if (result.length === 0) {
     return c.json({ error: "Account not found" }, 404);
@@ -1613,17 +1968,31 @@ accountsRouter.post("/:id/toggle", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json<{ enabled?: boolean }>().catch(() => ({} as { enabled?: boolean }));
 
-  const [current] = await db
-    .select({ enabled: accounts.enabled })
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let current;
+  try {
+    [current] = await db
+      .select({ enabled: accounts.enabled })
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id} for toggle:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!current) {
     return c.json({ error: "Account not found" }, 404);
   }
 
   const next = typeof body.enabled === "boolean" ? body.enabled : !current.enabled;
-  const updated = await pool.setEnabled(id, next);
+  let updated;
+  try {
+    updated = await pool.setEnabled(id, next);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to toggle account ${id}:`, error);
+    return c.json({ error: `Failed to toggle account: ${msg}` }, 500);
+  }
 
   if (!updated) {
     return c.json({ error: "Account not found" }, 404);
@@ -1651,8 +2020,14 @@ accountsRouter.post("/toggle-all", async (c) => {
     return c.json({ error: "enabled (boolean) is required" }, 400);
   }
 
-  const count = await pool.setEnabledByProvider(body.provider as ProviderName, body.enabled);
-  return c.json({ provider: body.provider, enabled: body.enabled, count });
+  try {
+    const count = await pool.setEnabledByProvider(body.provider as ProviderName, body.enabled);
+    return c.json({ provider: body.provider, enabled: body.enabled, count });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to toggle all accounts for provider ${body.provider}:`, error);
+    return c.json({ error: `Failed to toggle accounts: ${msg}` }, 500);
+  }
 });
 
 /**
@@ -1682,10 +2057,17 @@ accountsRouter.post("/bulk-delete", async (c) => {
   }
 
   // Resolve providers up front so we can invalidate exactly the affected pools.
-  const targets = await db
-    .select({ id: accounts.id, provider: accounts.provider })
-    .from(accounts)
-    .where(inArray(accounts.id, ids));
+  let targets;
+  try {
+    targets = await db
+      .select({ id: accounts.id, provider: accounts.provider })
+      .from(accounts)
+      .where(inArray(accounts.id, ids));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to resolve accounts for bulk delete:", error);
+    return c.json({ error: `Failed to resolve accounts: ${msg}` }, 500);
+  }
 
   if (targets.length === 0) {
     return c.json({ error: "No matching accounts found" }, 404);
@@ -1694,34 +2076,40 @@ accountsRouter.post("/bulk-delete", async (c) => {
   const foundIds = targets.map((t) => t.id);
   const providersAffected = Array.from(new Set(targets.map((t) => t.provider)));
 
-  // Nullify / clean foreign keys before the delete (mirrors DELETE /:id).
-  await db.update(requestLogs).set({ accountId: null }).where(inArray(requestLogs.accountId, foundIds));
-  await db.update(vccCards).set({ usedByAccountId: null }).where(inArray(vccCards.usedByAccountId, foundIds));
-  await db.delete(vccTransactions).where(inArray(vccTransactions.accountId, foundIds));
+  try {
+    // Nullify / clean foreign keys before the delete (mirrors DELETE /:id).
+    await db.update(requestLogs).set({ accountId: null }).where(inArray(requestLogs.accountId, foundIds));
+    await db.update(vccCards).set({ usedByAccountId: null }).where(inArray(vccCards.usedByAccountId, foundIds));
+    await db.delete(vccTransactions).where(inArray(vccTransactions.accountId, foundIds));
 
-  const result = await db.delete(accounts).where(inArray(accounts.id, foundIds)).returning();
-  const deletedIds = result.map((r) => r.id);
+    const result = await db.delete(accounts).where(inArray(accounts.id, foundIds)).returning();
+    const deletedIds = result.map((r) => r.id);
 
-  for (const provider of providersAffected) {
-    pool.invalidate(provider as ProviderName);
+    for (const provider of providersAffected) {
+      pool.invalidate(provider as ProviderName);
+    }
+    // Mirror single-delete's broadcast shape per id so existing dashboard
+    // listeners (`account_deleted`) keep working without changes, then send
+    // one summary frame for clients that prefer the bulk signal.
+    for (const id of deletedIds) {
+      broadcast({ type: "account_deleted", data: { id } });
+    }
+    broadcast({ type: "accounts_deleted", data: { ids: deletedIds, providers: providersAffected } });
+
+    const notFound = ids.filter((id) => !foundIds.includes(id));
+    return c.json({
+      success: true,
+      requested: ids.length,
+      deleted: deletedIds.length,
+      deletedIds,
+      providers: providersAffected,
+      notFound,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to bulk delete accounts:", error);
+    return c.json({ error: `Failed to delete accounts: ${msg}` }, 500);
   }
-  // Mirror single-delete's broadcast shape per id so existing dashboard
-  // listeners (`account_deleted`) keep working without changes, then send
-  // one summary frame for clients that prefer the bulk signal.
-  for (const id of deletedIds) {
-    broadcast({ type: "account_deleted", data: { id } });
-  }
-  broadcast({ type: "accounts_deleted", data: { ids: deletedIds, providers: providersAffected } });
-
-  const notFound = ids.filter((id) => !foundIds.includes(id));
-  return c.json({
-    success: true,
-    requested: ids.length,
-    deleted: deletedIds.length,
-    deletedIds,
-    providers: providersAffected,
-    notFound,
-  });
 });
 
 /**
@@ -1730,25 +2118,31 @@ accountsRouter.post("/bulk-delete", async (c) => {
 accountsRouter.delete("/:id", async (c) => {
   const id = Number(c.req.param("id"));
 
-  // Nullify foreign key references before deleting
-  await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, id));
-  await db.update(vccCards).set({ usedByAccountId: null }).where(eq(vccCards.usedByAccountId, id));
-  await db.delete(vccTransactions).where(eq(vccTransactions.accountId, id));
+  try {
+    // Nullify foreign key references before deleting
+    await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, id));
+    await db.update(vccCards).set({ usedByAccountId: null }).where(eq(vccCards.usedByAccountId, id));
+    await db.delete(vccTransactions).where(eq(vccTransactions.accountId, id));
 
-  const result = await db
-    .delete(accounts)
-    .where(eq(accounts.id, id))
-    .returning();
+    const result = await db
+      .delete(accounts)
+      .where(eq(accounts.id, id))
+      .returning();
 
-  if (result.length === 0) {
-    return c.json({ error: "Account not found" }, 404);
+    if (result.length === 0) {
+      return c.json({ error: "Account not found" }, 404);
+    }
+
+    const deleted = result[0]!;
+    pool.invalidate(deleted.provider as ProviderName);
+    broadcast({ type: "account_deleted", data: { id } });
+
+    return c.json({ success: true, deleted: id });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to delete account ${id}:`, error);
+    return c.json({ error: `Failed to delete account: ${msg}` }, 500);
   }
-
-  const deleted = result[0]!;
-  pool.invalidate(deleted.provider as ProviderName);
-  broadcast({ type: "account_deleted", data: { id } });
-
-  return c.json({ success: true, deleted: id });
 });
 
 /**
@@ -1756,20 +2150,32 @@ accountsRouter.delete("/:id", async (c) => {
  */
 accountsRouter.post("/:id/login", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id} for login:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account) {
     return c.json({ error: "Account not found" }, 404);
   }
 
-  // Import auth runner dynamically to avoid circular deps
-  const { loginAccount } = await import("../auth/runner");
-  const result = await loginAccount(account);
-
-  return c.json(result);
+  try {
+    // Import auth runner dynamically to avoid circular deps
+    const { loginAccount } = await import("../auth/runner");
+    const result = await loginAccount(account);
+    return c.json(result);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Login failed for account ${id}:`, error);
+    return c.json({ error: `Login failed: ${msg}` }, 500);
+  }
 });
 
 /**
@@ -1777,21 +2183,33 @@ accountsRouter.post("/:id/login", async (c) => {
  */
 accountsRouter.post("/:id/refresh-quota", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id} for quota refresh:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account) {
     return c.json({ error: "Account not found" }, 404);
   }
 
-  const result = await warmupAccount(account);
-  if (!result.success && !result.retryable && result.kind !== "unsupported") {
-    return c.json(result, 500);
+  try {
+    const result = await warmupAccount(account);
+    if (!result.success && !result.retryable && result.kind !== "unsupported") {
+      return c.json(result, 500);
+    }
+    return c.json(result);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Quota refresh failed for account ${id}:`, error);
+    return c.json({ error: `Quota refresh failed: ${msg}` }, 500);
   }
-
-  return c.json(result);
 });
 
 /**
@@ -1799,10 +2217,17 @@ accountsRouter.post("/:id/refresh-quota", async (c) => {
  */
 accountsRouter.post("/:id/warmup", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id} for warmup:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account) {
     return c.json({ error: "Account not found" }, 404);
@@ -1825,7 +2250,8 @@ export function decodeJwtPayload(token: string): Record<string, any> {
     const padded = parts[1]! + "=".repeat((4 - parts[1]!.length % 4) % 4);
     const json = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
     return JSON.parse(json);
-  } catch {
+  } catch (err) {
+    console.warn("[Codex] Failed to decode JWT payload:", err);
     return {};
   }
 }
@@ -1888,7 +2314,9 @@ export async function importCodexAccessToken(accessToken: string, name?: string)
         if (!email) email = String(usage.email || "");
         if (!accountId) accountId = String(usage.account_id || usage.chatgpt_account_id || "");
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[Codex] Failed to fetch usage info for token import:", err);
+    }
   }
 
   if (!email) {
@@ -1991,7 +2419,9 @@ export async function exchangeCodexAuthorizationCode(input: {
         if (!email) email = String(usage.email || "");
         if (!accountId) accountId = String(usage.account_id || usage.chatgpt_account_id || "");
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[Codex] Failed to fetch usage info for OAuth exchange:", err);
+    }
   }
 
   if (!email) {
@@ -2096,7 +2526,9 @@ export async function exchangeCodexRefreshTokens(tokens: string[]) {
               accountId = String(usage.account_id || usage.chatgpt_account_id || "");
             }
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[Codex] Failed to fetch usage info for bulk token import:", err);
+        }
       }
 
       if (!email) email = `codex-${trimmed.slice(-8)}@token.local`;
@@ -2135,208 +2567,458 @@ async function handleCodexInstantLogin(c: any, tokens: string[]) {
   return c.json(result);
 }
 
-/**
- * BYOK (Bring Your Own Key) Management Endpoints
- */
+async function upsertGrokCliAccount(
+  email: string,
+  tokens: Record<string, unknown>,
+  password?: string,
+) {
+  const encryptedPassword = encrypt(password || "oauth-device");
+  const now = new Date();
+  const setFields = {
+    status: "active",
+    tokens: tokens as unknown,
+    password: encryptedPassword,
+    errorMessage: null,
+    lastLoginAt: now,
+    updatedAt: now,
+    quotaLimit: -1,
+    quotaRemaining: -1,
+  };
 
-/**
- * POST /api/accounts/byok - Create BYOK provider
- */
-accountsRouter.post("/byok", async (c) => {
-  const body = await c.req.json<{
-    label: string;
-    base_url: string;
-    api_key: string;
-    format?: "openai" | "anthropic" | "auto";
-    models: string[];
-    headers?: Record<string, string>;
-  }>();
+  // Atomic upsert on (provider, email) unique index.
+  // ON CONFLICT DO UPDATE keeps idempotent re-imports safe under concurrency.
+  try {
+    const inserted = await db.insert(accounts).values({
+      provider: "grok-cli",
+      email,
+      password: encryptedPassword,
+      status: "active",
+      tokens: tokens as unknown,
+      lastLoginAt: now,
+      quotaLimit: -1,
+      quotaRemaining: -1,
+    })
+      .onConflictDoUpdate({
+        target: [accounts.provider, accounts.email],
+        set: setFields,
+      })
+      .returning();
+    return inserted[0]!.id;
+  } catch (err) {
+    // Fallback path if drizzle onConflictDoUpdate is not supported by the
+    // active sqlite driver / build — mirrors the original select-then-upsert.
+    const existing = await db.select().from(accounts)
+      .where(eq(accounts.email, email))
+      .then((rows) => rows.find((r) => r.provider === "grok-cli"));
 
-  if (!body.label || !body.base_url || !body.api_key || !body.models || body.models.length === 0) {
-    return c.json({ error: "label, base_url, api_key, and models[] are required" }, 400);
+    if (existing) {
+      await db.update(accounts).set(setFields).where(eq(accounts.id, existing.id));
+      return existing.id;
+    }
+    throw err;
   }
+}
 
-  // Validate label format (lowercase alphanumeric + hyphens)
-  if (!/^[a-z0-9-]+$/.test(body.label)) {
-    return c.json({ error: "label must be lowercase alphanumeric with hyphens only" }, 400);
-  }
+/** Complete Grok CLI device-code OAuth and upsert account. */
+export async function completeGrokCliDeviceLogin(input: {
+  accessToken: string;
+  refreshToken?: string | null;
+  idToken?: string | null;
+  expiresIn?: number | null;
+  scope?: string | null;
+  user?: any;
+}) {
+  const claims = decodeJwtPayload(input.idToken || input.accessToken);
+  const emailFromJwt =
+    String(claims.email || claims.preferred_username || claims.upn || "").trim() || null;
+  const emailFromUser =
+    String(input.user?.email || input.user?.userEmail || "").trim() || null;
+  const userId =
+    input.user?.userId ||
+    input.user?.principalId ||
+    claims.sub ||
+    null;
+  const displayName =
+    [input.user?.firstName, input.user?.lastName].filter(Boolean).join(" ").trim() ||
+    String(input.user?.name || claims.name || "").trim() ||
+    null;
 
-  // Check uniqueness
-  const existing = await db.select().from(accounts)
-    .where(eq(accounts.email, body.label))
-    .then((rows) => rows.find((r) => r.provider === "byok"));
+  const email =
+    emailFromUser ||
+    emailFromJwt ||
+    (userId ? `grok-cli-${String(userId).slice(0, 12)}@token.local` : `grok-cli-${input.accessToken.slice(-8)}@token.local`);
 
-  if (existing) {
-    return c.json({ error: "BYOK provider with this label already exists" }, 409);
-  }
+  const expiresIn = Number(input.expiresIn) || 3600;
+  const expiresAt = String(Math.floor(Date.now() / 1000) + expiresIn);
 
-  // Encrypt API key
-  const encryptedKey = encrypt(body.api_key);
-
-  // Build tokens JSON
   const tokens = {
-    base_url: body.base_url,
-    format: body.format || "auto",
-    models: body.models,
-    model_prefix: body.label,
-    headers: body.headers || {},
+    access_token: input.accessToken,
+    refresh_token: input.refreshToken || "",
+    id_token: input.idToken || "",
+    expires_at: expiresAt,
+    email,
+    user_id: userId ? String(userId) : null,
+    method: "device_code",
+    subscription_tier: input.user?.subscriptionTier ?? null,
+    has_grok_code_access: input.user?.hasGrokCodeAccess ?? null,
+  };
+
+  const id = await upsertGrokCliAccount(email, tokens);
+  pool.invalidate("grok-cli" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "grok-cli", count: 1 } });
+
+  return {
+    id,
+    provider: "grok-cli",
+    email,
+    name: displayName || email,
+  };
+}
+
+async function upsertCodebuddyAccount(
+  email: string,
+  tokens: Record<string, unknown>,
+  password?: string,
+) {
+  const encryptedPassword = encrypt(password || "oauth-device");
+  const now = new Date();
+  const setFields = {
+    status: "active",
+    tokens: tokens as unknown,
+    password: encryptedPassword,
+    errorMessage: null,
+    lastLoginAt: now,
+    updatedAt: now,
+    quotaLimit: -1,
+    quotaRemaining: -1,
+  };
+
+  // Atomic upsert on (provider, email) unique index — idempotent re-login.
+  try {
+    const inserted = await db.insert(accounts).values({
+      provider: "codebuddy",
+      email,
+      password: encryptedPassword,
+      status: "active",
+      tokens: tokens as unknown,
+      lastLoginAt: now,
+      quotaLimit: -1,
+      quotaRemaining: -1,
+    })
+      .onConflictDoUpdate({
+        target: [accounts.provider, accounts.email],
+        set: setFields,
+      })
+      .returning();
+    return inserted[0]!.id;
+  } catch (err) {
+    // Fallback: select-then-upsert if the driver lacks onConflictDoUpdate.
+    const existing = await db.select().from(accounts)
+      .where(eq(accounts.email, email))
+      .then((rows) => rows.find((r) => r.provider === "codebuddy"));
+
+    if (existing) {
+      await db.update(accounts).set(setFields).where(eq(accounts.id, existing.id));
+      return existing.id;
+    }
+    throw err;
+  }
+}
+
+/** Complete CodeBuddy global OAuth device flow and upsert account (access_token). */
+export async function completeCodebuddyOAuthLogin(input: {
+  accessToken: string;
+  refreshToken?: string | null;
+  expiresIn?: number | null;
+  uid?: string | null;
+}) {
+  const claims = decodeJwtPayload(input.accessToken);
+  const email = String(claims.email || "").trim() || null;
+  // Prefer the response's uid, fall back to the JWT sub claim.
+  const sub = String(input.uid || claims.sub || "").trim() || null;
+
+  const label =
+    email ||
+    (sub ? `cb-${sub.slice(0, 12)}@token.local` : `cb-${input.accessToken.slice(-8)}@token.local`);
+
+  // Derive expiry from the JWT `exp` claim when present (authoritative), else
+  // fall back to the response's expiresIn, else a 24h default.
+  const jwtExp = claims.exp ? Number(claims.exp) : null;
+  const expiresIn = Number(input.expiresIn) || 86400;
+  const expiresAt = String(
+    (Number.isFinite(jwtExp) && jwtExp && jwtExp > 0 ? jwtExp : Math.floor(Date.now() / 1000) + expiresIn),
+  );
+
+  const tokens = {
+    access_token: input.accessToken,
+    refresh_token: input.refreshToken || "",
+    expires_at: expiresAt,
+    email: label,
+    user_id: sub,
+    method: "oauth_device_code",
+  };
+
+  const id = await upsertCodebuddyAccount(label, tokens);
+  pool.invalidate("codebuddy" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "codebuddy", count: 1 } });
+
+  return {
+    id,
+    provider: "codebuddy",
+    email: label,
+    name: label,
+  };
+}
+
+async function upsertCodebuddyChinaAccount(
+  email: string,
+  tokens: Record<string, unknown>,
+  password?: string,
+) {
+  const encryptedPassword = encrypt(password || "oauth-access-token");
+  const now = new Date();
+  const setFields = {
+    status: "active",
+    tokens: tokens as unknown,
+    password: encryptedPassword,
+    errorMessage: null,
+    lastLoginAt: now,
+    updatedAt: now,
+    quotaLimit: -1,
+    quotaRemaining: -1,
   };
 
   try {
-    const result = await db.insert(accounts).values({
-      provider: "byok",
-      email: body.label,
-      password: encryptedKey,
+    const inserted = await db.insert(accounts).values({
+      provider: "codebuddy-china",
+      email,
+      password: encryptedPassword,
       status: "active",
-      enabled: true,
-      tokens: tokens,
+      tokens: tokens as unknown,
+      lastLoginAt: now,
       quotaLimit: -1,
       quotaRemaining: -1,
-    }).returning();
+    })
+      .onConflictDoUpdate({
+        target: [accounts.provider, accounts.email],
+        set: setFields,
+      })
+      .returning();
+    return inserted[0]!.id;
+  } catch (err) {
+    const existing = await db.select().from(accounts)
+      .where(eq(accounts.email, email))
+      .then((rows) => rows.find((r) => r.provider === "codebuddy-china"));
 
-    const created = result[0]!;
-    pool.invalidate("byok" as ProviderName);
-
-    broadcast({
-      type: "byok_created",
-      data: { id: created.id, label: body.label },
-    });
-
-    // Refresh BYOK model cache
-    const { refreshByokModels } = await import("../proxy/providers/registry");
-    await refreshByokModels();
-
-    return c.json({
-      success: true,
-      id: created.id,
-      label: body.label,
-      models: body.models.map((m) => `${body.label}-${m}`),
-    }, 201);
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 500);
+    if (existing) {
+      await db.update(accounts).set(setFields).where(eq(accounts.id, existing.id));
+      return existing.id;
+    }
+    throw err;
   }
-});
+}
 
-/**
- * GET /api/accounts/byok - List all BYOK providers
- */
-accountsRouter.get("/byok", async (c) => {
-  const byokAccounts = await db.select().from(accounts)
-    .where(eq(accounts.provider, "byok"));
+/** Import CodeBuddy China account from an access_token (Keycloak JWT) + uid. */
+export async function completeCodebuddyChinaOAuthLogin(input: {
+  accessToken: string;
+  refreshToken?: string | null;
+  expiresIn?: number | null;
+  uid?: string | null;
+}) {
+  const claims = decodeJwtPayload(input.accessToken);
+  const email = String(claims.email || "").trim() || null;
+  // Prefer the response's uid, fall back to the JWT sub claim.
+  const sub = String(input.uid || claims.sub || "").trim() || null;
 
-  const providers = byokAccounts.map((acc) => {
-    const tokens = typeof acc.tokens === "string"
-      ? JSON.parse(acc.tokens)
-      : acc.tokens;
+  const label =
+    email ||
+    (sub ? `cbc-${sub.slice(0, 12)}@token.local` : `cbc-${input.accessToken.slice(-8)}@token.local`);
 
-    return {
-      id: acc.id,
-      label: acc.email,
-      base_url: tokens?.base_url || "",
-      format: tokens?.format || "auto",
-      models: tokens?.models || [],
-      model_prefix: tokens?.model_prefix || acc.email,
-      status: acc.status,
-      enabled: acc.enabled,
-      available_models: (tokens?.models || []).map((m: string) => `${tokens?.model_prefix || acc.email}-${m}`),
-    };
-  });
+  // Derive expiry from the JWT `exp` claim when present (authoritative), else
+  // fall back to the response's expiresIn, else a 24h default.
+  const jwtExp = claims.exp ? Number(claims.exp) : null;
+  const expiresIn = Number(input.expiresIn) || 86400;
+  const expiresAt = String(
+    (Number.isFinite(jwtExp) && jwtExp && jwtExp > 0 ? jwtExp : Math.floor(Date.now() / 1000) + expiresIn),
+  );
 
-  return c.json({ providers, total: providers.length });
-});
-
-/**
- * PATCH /api/accounts/byok/:id - Update BYOK provider
- */
-accountsRouter.patch("/byok/:id", async (c) => {
-  const id = Number(c.req.param("id"));
-  const body = await c.req.json<{
-    base_url?: string;
-    api_key?: string;
-    format?: "openai" | "anthropic" | "auto";
-    models?: string[];
-    headers?: Record<string, string>;
-  }>();
-
-  const account = await db.select().from(accounts)
-    .where(eq(accounts.id, id))
-    .get();
-
-  if (!account || account.provider !== "byok") {
-    return c.json({ error: "BYOK provider not found" }, 404);
-  }
-
-  const tokens = typeof account.tokens === "string"
-    ? JSON.parse(account.tokens)
-    : account.tokens || {};
-
-  // Update fields
-  if (body.base_url) tokens.base_url = body.base_url;
-  if (body.format) tokens.format = body.format;
-  if (body.models) tokens.models = body.models;
-  if (body.headers) tokens.headers = body.headers;
-
-  const updateData: Record<string, unknown> = {
-    tokens: tokens,
-    updatedAt: new Date(),
+  const tokens = {
+    access_token: input.accessToken,
+    refresh_token: input.refreshToken || "",
+    expires_at: expiresAt,
+    email: label,
+    user_id: sub,
+    method: "manual_access_token",
   };
 
-  if (body.api_key) {
-    updateData.password = encrypt(body.api_key);
+  const id = await upsertCodebuddyChinaAccount(label, tokens);
+  pool.invalidate("codebuddy-china" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "codebuddy-china", count: 1 } });
+
+  return {
+    id,
+    provider: "codebuddy-china",
+    email: label,
+    name: label,
+  };
+}
+
+async function upsertClaudeAccount(email: string, tokens: ClaudeTokens) {
+  const existing = await db.select().from(accounts)
+    .where(eq(accounts.email, email))
+    .then((rows) => rows.find((r) => r.provider === "claude"));
+
+  if (existing) {
+    await db.update(accounts).set({
+      status: "active",
+      tokens: tokens as unknown,
+      errorMessage: null,
+      lastLoginAt: new Date(),
+      updatedAt: new Date(),
+      metadata: {
+        ...(typeof existing.metadata === "object" && existing.metadata ? existing.metadata as object : {}),
+        subscription_type: tokens.subscription_type || null,
+        account_id: tokens.account_id || null,
+      },
+    }).where(eq(accounts.id, existing.id));
+    return existing.id;
   }
 
-  await db.update(accounts)
-    .set(updateData)
-    .where(eq(accounts.id, id));
+  const inserted = await db.insert(accounts).values({
+    provider: "claude",
+    email,
+    password: encrypt("oauth-pkce"),
+    status: "active",
+    tokens: tokens as unknown,
+    lastLoginAt: new Date(),
+    metadata: {
+      subscription_type: tokens.subscription_type || null,
+      account_id: tokens.account_id || null,
+    },
+  }).returning();
 
-  pool.invalidate("byok" as ProviderName);
+  return inserted[0]!.id;
+}
 
-  broadcast({
-    type: "byok_updated",
-    data: { id },
+export async function completeClaudeOAuthLogin(input: {
+  code: string;
+  codeVerifier: string;
+  state?: string;
+}) {
+  const tokens = await exchangeClaudeAuthorizationCode({
+    code: input.code,
+    codeVerifier: input.codeVerifier,
+    state: input.state,
   });
 
-  // Refresh BYOK model cache
-  const { refreshByokModels } = await import("../proxy/providers/registry");
-  await refreshByokModels();
+  const profile = await fetchClaudeProfile(tokens.access_token);
+  const email =
+    tokens.email ||
+    profile.email ||
+    (tokens.account_id ? `claude-${String(tokens.account_id).slice(0, 12)}@oauth.local` : `claude-${tokens.access_token.slice(-8)}@oauth.local`);
 
-  return c.json({
-    success: true,
+  const merged: ClaudeTokens = {
+    ...tokens,
+    email,
+    account_id: tokens.account_id || profile.accountId,
+    subscription_type: tokens.subscription_type || profile.subscriptionType,
+    method: "oauth_pkce",
+  };
+
+  const id = await upsertClaudeAccount(email, merged);
+  pool.invalidate("claude" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "claude", count: 1 } });
+  broadcast({ type: "account_created", data: { id, provider: "claude", email } });
+
+  return {
     id,
-    label: account.email,
-    models: (tokens.models || []).map((m: string) => `${tokens.model_prefix || account.email}-${m}`),
-  });
-});
+    provider: "claude",
+    email,
+    name: profile.displayName || email,
+    plan: merged.subscription_type || null,
+  };
+}
 
 /**
- * DELETE /api/accounts/byok/:id - Delete BYOK provider
+ * POST /api/accounts/grok-cli/import - Import a farmed Grok CLI account.
+ *
+ * Used by the grok farmer (farm.py) to push freshly farmed accounts directly
+ * into the pool. Idempotent on (provider, email): re-imports update tokens and
+ * password instead of failing with 409.
+ *
+ * Body:
+ *   {
+ *     "email": "user@domain",                  // required
+ *     "password": "account-password",          // optional, stored encrypted
+ *     "tokens": {                              // required, must be object
+ *       "access_token": "...",                 // required
+ *       "refresh_token": "...",                // required
+ *       "id_token": "...",                     // optional
+ *       "expires_at": "2026-07-23T...Z",       // optional, ISO 8601
+ *       "expires_in": 21600,                   // optional, seconds
+ *       "email": "user@domain",                // optional
+ *       "client_id": "...",                    // optional
+ *       "auth_mode": "oidc",                   // optional
+ *       "scope": "..."                         // optional
+ *     }
+ *   }
  */
-accountsRouter.delete("/byok/:id", async (c) => {
-  const id = Number(c.req.param("id"));
+accountsRouter.post("/grok-cli/import", async (c) => {
+  let body: {
+    email?: string;
+    password?: string;
+    tokens?: Record<string, unknown>;
+  };
 
-  // Nullify foreign key references
-  await db.update(requestLogs).set({ accountId: null }).where(eq(requestLogs.accountId, id));
-
-  const result = await db.delete(accounts)
-    .where(eq(accounts.id, id))
-    .returning();
-
-  if (result.length === 0) {
-    return c.json({ error: "BYOK provider not found" }, 404);
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  pool.invalidate("byok" as ProviderName);
+  const email = (body.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "email is required and must be valid" }, 400);
+  }
 
-  broadcast({
-    type: "byok_deleted",
-    data: { id },
-  });
+  const tokens = body.tokens;
+  if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
+    return c.json({ error: "tokens must be an object" }, 400);
+  }
 
-  // Refresh BYOK model cache
-  const { refreshByokModels } = await import("../proxy/providers/registry");
-  await refreshByokModels();
+  const accessToken = String(tokens.access_token || "").trim();
+  const refreshToken = String(tokens.refresh_token || "").trim();
+  if (!accessToken || !refreshToken) {
+    return c.json(
+      { error: "tokens.access_token and tokens.refresh_token are required" },
+      400,
+    );
+  }
 
-  return c.json({ success: true, deleted: id });
+  const normalizedTokens: Record<string, unknown> = { ...tokens };
+  // Normalize expires_at to a unix-seconds string to match the existing
+  // grok-cli token shape used by completeGrokCliDeviceLogin.
+  if (typeof normalizedTokens.expires_at === "string") {
+    const iso = normalizedTokens.expires_at;
+    const parsed = Date.parse(iso);
+    if (!Number.isNaN(parsed)) {
+      normalizedTokens.expires_at = String(Math.floor(parsed / 1000));
+    }
+  }
+
+  try {
+    const id = await upsertGrokCliAccount(email, normalizedTokens, body.password);
+    pool.invalidate("grok-cli" as ProviderName);
+    broadcast({ type: "accounts_updated", data: { provider: "grok-cli", count: 1 } });
+    return c.json(
+      { id, provider: "grok-cli", email, status: "active", updated: true },
+      200,
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[API accounts] Failed to import grok-cli account:", error);
+    return c.json({ error: `Failed to import account: ${msg}` }, 500);
+  }
 });
 
 /**
@@ -2345,26 +3027,41 @@ accountsRouter.delete("/byok/:id", async (c) => {
  */
 accountsRouter.post("/:id/open-panel", async (c) => {
   const id = Number(c.req.param("id"));
-  const [account] = await db
-    .select()
-    .from(accounts)
-    .where(eq(accounts.id, id));
+  let account;
+  try {
+    [account] = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, id));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to fetch account ${id} for open-panel:`, error);
+    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+  }
 
   if (!account) {
     return c.json({ error: "Account not found" }, 404);
   }
 
-  const tokens = typeof account.tokens === "string"
-    ? JSON.parse(account.tokens)
-    : account.tokens;
+  let tokens: any;
+  try {
+    tokens = typeof account.tokens === "string"
+      ? JSON.parse(account.tokens)
+      : account.tokens;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to parse tokens for account ${id}:`, error);
+    return c.json({ error: `Corrupt account tokens: ${msg}` }, 500);
+  }
 
   if (!tokens) {
     return c.json({ error: "No tokens available" }, 400);
   }
 
+  let browser: Awaited<ReturnType<typeof import("playwright")["chromium"]["launch"]>> | null = null;
   try {
     const { chromium } = await import("playwright");
-    const browser = await chromium.launch({ headless: false });
+    browser = await chromium.launch({ headless: false });
     const context = await browser.newContext();
 
     if (account.provider.startsWith("kiro")) {
@@ -2416,7 +3113,9 @@ accountsRouter.post("/:id/open-panel", async (c) => {
             const usageData = (await usageResp.json()) as { userInfo?: { userId?: string } };
             userId = usageData.userInfo?.userId || "";
           }
-        } catch { /* ignore */ }
+        } catch (err) {
+          console.warn(`[Open Panel] Failed to fetch Kiro userId for account ${id}:`, err);
+        }
       }
 
       await context.addCookies([
@@ -2493,8 +3192,15 @@ accountsRouter.post("/:id/open-panel", async (c) => {
       }, 400);
     }
   } catch (error) {
+    // Best-effort: close the browser on error. For kiro/qoder paths that
+    // succeed, the browser stays open intentionally so the user can interact.
+    if (browser) {
+      try { await browser.close(); } catch { /* already closing */ }
+    }
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[API accounts] Failed to open panel for account ${id}:`, error);
     return c.json({
-      error: `Failed to open browser: ${error instanceof Error ? error.message : String(error)}`,
+      error: `Failed to open browser: ${msg}`,
     }, 500);
   }
 });

@@ -14,6 +14,55 @@ interface CodeBuddyChinaTokens {
   api_key?: string;
   access_token?: string;
   session_token?: string;
+  refresh_token?: string;
+  expires_at?: string;
+}
+
+/**
+ * CodeBuddy China OAuth refresh — same contract as global codebuddy.ai
+ * (POST /v2/plugin/auth/token/refresh, refresh token in X-Refresh-Token header,
+ * body "{}") but against www.codebuddy.cn with its own X-Domain.
+ * 401/403 on refresh → refresh token dead → re-login.
+ */
+export async function refreshCodebuddyChinaToken(refreshToken: string): Promise<{
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+}> {
+  const response = await fetch("https://www.codebuddy.cn/v2/plugin/auth/token/refresh", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Domain": "www.codebuddy.cn",
+      "X-Refresh-Token": refreshToken,
+      "X-Auth-Refresh-Source": "plugin",
+      "X-Product": "SaaS",
+    },
+    body: "{}",
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("Refresh token expired or revoked — re-login required");
+  }
+  if (!response.ok) {
+    throw new Error(`CodeBuddy China token refresh failed (HTTP ${response.status})`);
+  }
+
+  const data = (await response.json()) as any;
+  if (data?.code !== 0 || !data?.data?.accessToken) {
+    throw new Error(`CodeBuddy China token refresh error: ${data?.msg || data?.message || "unknown"}`);
+  }
+
+  const d = data.data;
+  const expiresIn = Number(d.expiresIn) || 86400;
+  return {
+    access_token: d.accessToken,
+    refresh_token: d.refreshToken || refreshToken,
+    expires_at: String(Math.floor(Date.now() / 1000) + expiresIn),
+  };
 }
 
 /** Map cbc- prefixed model IDs to actual CodeBuddy China API model names. */
@@ -30,11 +79,14 @@ const CBC_MODEL_MAP: Record<string, string> = {
   "cbc-kimi-k2.5": "kimi-k2.5",
   "cbc-kimi-k2.6": "kimi-k2.6",
   "cbc-kimi-k2.7": "kimi-k2.7",
+  "cbc-kimi-k2.7-code": "kimi-k2.7-code",
+  "cbc-kimi-k3": "kimi-k3",
   // GLM (Zhipu)
   "cbc-glm-5.1": "glm-5.1",
   "cbc-glm-5.2": "glm-5.2",
   "cbc-glm-5v-turbo": "glm-5v-turbo",
   // MiniMax
+  "cbc-minimax-m2.7": "minimax-m2.7",
   "cbc-minimax-m3": "minimax-m3",
   // Hunyuan (Tencent)
   "cbc-hy3-preview": "hy3-preview",
@@ -62,6 +114,15 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     return CBC_MODEL_MAP[base] || base;
   }
 
+  private isKimiK3(resolved: string): boolean {
+    return resolved === "kimi-k3";
+  }
+
+  /** Kimi K3 rejects public http(s) image URLs — only data: and ms://. */
+  private isAllowedKimiVisionUrl(url: string): boolean {
+    return url.startsWith("data:") || url.startsWith("ms://");
+  }
+
   private baseUrl = "https://www.codebuddy.cn";
 
   supportedModels: ModelInfo[] = [
@@ -77,11 +138,17 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     { id: "cbc-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 164000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.05, creditSource: "upstream" },
     { id: "cbc-kimi-k2.6", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.09, creditSource: "upstream" },
     { id: "cbc-kimi-k2.7", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
+    // ponytail: k2.7-code specs estimated from k2.7 (256k ctx, thinking on); vision disabled (code-focused variant). Upgrade path: verify upstream docs when CN publishes K2.7-Code page.
+    { id: "cbc-kimi-k2.7-code", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: true, vision: false, creditUnit: "credit", creditRate: 0.06, creditSource: "estimated" },
+    // K3: thinking always on; max_completion_tokens up to 1_048_576; vision = base64/ms:// only
+    { id: "cbc-kimi-k3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 1048576, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
     // GLM — 5.1 / 5.2 / 5v-turbo all support vision (5v-turbo is the dedicated vision model)
     { id: "cbc-glm-5.1", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
     { id: "cbc-glm-5.2", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
     { id: "cbc-glm-5v-turbo", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.03, creditSource: "upstream" },
     // MiniMax — vision support is flaky upstream (model often replies "I don't see"), kept enabled for parity
+    // ponytail: m2.7 specs copied from m3, vision disabled (below M3 tier). Upgrade path: confirm against CN docs when MiniMax-M2.7 page ships.
+    { id: "cbc-minimax-m2.7", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 512000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.05, creditSource: "estimated" },
     { id: "cbc-minimax-m3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 512000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.10, creditSource: "upstream" },
     // Hunyuan — model itself always replies "I can't see the image" even with payload accepted; vision disabled
     { id: "cbc-hy3-preview", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 192000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
@@ -141,9 +208,13 @@ export class CodeBuddyChinaProvider extends BaseProvider {
    * flag with text-flattened content) produced 100% hallucinated/blind responses
    * because the upstream silently dropped the image data — see commit history.
    */
-  private cleanMessages(request: ChatCompletionRequest): { messages: any[]; hasVision: boolean } {
+  private cleanMessages(
+    request: ChatCompletionRequest,
+    opts?: { strictKimiVision?: boolean },
+  ): { messages: any[]; hasVision: boolean } {
     const cleanedMessages: any[] = [];
     let hasVision = false;
+    const strictVision = !!opts?.strictKimiVision;
 
     for (const msg of request.messages) {
       let content = msg.content;
@@ -158,7 +229,20 @@ export class CodeBuddyChinaProvider extends BaseProvider {
           });
           continue;
         }
-        cleanedMessages.push({ role: msg.role, content });
+        // Preserve OpenAI-native assistant tool_calls on string content
+        if (msg.role === "assistant" && (msg as any).tool_calls) {
+          cleanedMessages.push({
+            role: "assistant",
+            content,
+            tool_calls: (msg as any).tool_calls,
+          });
+          continue;
+        }
+        // Preserve OpenAI-native tool messages' tool_call_id — dropping it
+        // makes the upstream reject the whole history (HTTP 400 code 11148).
+        const flatMsg: any = { role: msg.role, content };
+        if ((msg as any).tool_call_id) flatMsg.tool_call_id = (msg as any).tool_call_id;
+        cleanedMessages.push(flatMsg);
         continue;
       }
 
@@ -233,24 +317,23 @@ export class CodeBuddyChinaProvider extends BaseProvider {
         // CodeBuddy China expects: content: [ {type:"image_url", image_url:{url:"..."}}, {type:"text", text:"..."} ]
         // This is the STANDARD OpenAI vision format — confirmed working with glm-4.6v,
         // glm-5v-turbo, deepseek-v3-2-volc via direct upstream testing.
+        // Kimi K3: public http(s) URLs unsupported — keep data: / ms:// only.
         const outputContent: any[] = [];
 
         for (const block of content) {
           if (block.type === "text") {
             outputContent.push({ type: "text", text: block.text || "" });
           } else if (block.type === "image_url" && block.image_url) {
-            // OpenAI-style image_url — pass through as-is
             const url = typeof block.image_url === "string" ? block.image_url : block.image_url.url;
-            if (url) {
+            if (url && (!strictVision || this.isAllowedKimiVisionUrl(url))) {
               outputContent.push({ type: "image_url", image_url: { url } });
               hasVision = true;
             }
           } else if (block.type === "image" && block.source) {
-            // Anthropic-style image → convert to OpenAI image_url with data URL
             const base64 = block.source.type === "base64"
               ? `data:${block.source.media_type || "image/png"};base64,${block.source.data}`
               : block.source.url || "";
-            if (base64) {
+            if (base64 && (!strictVision || this.isAllowedKimiVisionUrl(base64))) {
               outputContent.push({ type: "image_url", image_url: { url: base64 } });
               hasVision = true;
             }
@@ -269,11 +352,74 @@ export class CodeBuddyChinaProvider extends BaseProvider {
         continue;
       }
 
-      // Fallback: pass through as-is
-      cleanedMessages.push({ role: msg.role, content: content || "" });
+      // Fallback: pass through; keep assistant tool_calls if present
+      if (msg.role === "assistant" && (msg as any).tool_calls) {
+        cleanedMessages.push({
+          role: "assistant",
+          content: content || "",
+          tool_calls: (msg as any).tool_calls,
+        });
+      } else {
+        const fallbackMsg: any = { role: msg.role, content: content || "" };
+        if ((msg as any).tool_call_id) fallbackMsg.tool_call_id = (msg as any).tool_call_id;
+        cleanedMessages.push(fallbackMsg);
+      }
     }
 
-    return { messages: cleanedMessages, hasVision };
+    // CodeBuddy China rejects requests where tool calls and tool results don't
+    // pair up (HTTP 400 code 11148). Normalize so every `tool` message has a
+    // `tool_call_id` that matches a preceding assistant `tool_calls[].id` —
+    // otherwise the upstream returns "tool calls and tool results do not match".
+    return { messages: this.pairToolMessages(cleanedMessages), hasVision };
+  }
+
+  /**
+   * Pair tool results with their tool calls.
+   *
+   * Upstream (codebuddy.cn) returns 400 code 11148 "tool calls and tool results
+   * do not match" when:
+   *  - a `tool` message has a `tool_call_id` that no assistant `tool_calls[].id`
+   *    references (e.g. after message truncation/compression), or
+   *  - a `tool` message lost its `tool_call_id` during conversion, or
+   *  - Anthropic `tool_use`/`tool_result` blocks lacked ids, so random UUIDs were
+   *    generated independently on each side and don't line up.
+   *
+   * Fix strategy: track emitted assistant tool_call ids in order; a `tool`
+   * message whose id is unknown gets the next unmatched tool call id. Orphaned
+   * tool results (no tool call anywhere) are dropped rather than sent upstream.
+   */
+  private pairToolMessages(messages: any[]): any[] {
+    const pendingIds: string[] = [];
+    const cleaned: any[] = [];
+
+    for (const msg of messages) {
+      if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+          if (tc?.id) pendingIds.push(tc.id);
+        }
+        cleaned.push(msg);
+        continue;
+      }
+
+      if (msg.role === "tool") {
+        if (msg.tool_call_id && pendingIds.includes(msg.tool_call_id)) {
+          pendingIds.splice(pendingIds.indexOf(msg.tool_call_id), 1);
+          cleaned.push(msg);
+        } else if (pendingIds.length > 0) {
+          // Unknown/missing id — bind to the next unmatched tool call.
+          msg.tool_call_id = pendingIds.shift();
+          cleaned.push(msg);
+        } else {
+          // Orphaned tool result with no matching tool call — drop it.
+          console.warn("[CodeBuddy China] Dropping orphaned tool result (no matching tool call)");
+        }
+        continue;
+      }
+
+      cleaned.push(msg);
+    }
+
+    return cleaned;
   }
 
   private isAgentSystemPrompt(content: string): boolean {
@@ -408,7 +554,38 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       const response = await this.makeRequest(apiKey, request, true);
 
       if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired, re-login required" };
+        const refreshResult = await this.refreshToken(account);
+        if (!refreshResult.success || !refreshResult.tokens) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyChinaTokens;
+        const newApiKey = this.getApiKey(newTokens);
+        if (!newApiKey) return { success: false, error: "Session expired, re-login required" };
+        const retryResponse = await this.makeRequest(newApiKey, request, true);
+        if (retryResponse.status === 401 || retryResponse.status === 403) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        if (retryResponse.ok) {
+          const retryData = await this.aggregateStreamResponse(retryResponse, request.model);
+          const totalTokens = retryData.usage.total_tokens || 0;
+          const realCredit = (retryData as any)._realCredit;
+          const creditsUsed = realCredit != null ? realCredit : (totalTokens > 0 ? totalTokens * this.getProviderCreditRate(request.model) : 0);
+          const creditSource: "upstream" | "estimated" = realCredit != null ? "upstream" : "estimated";
+          delete (retryData as any)._realCredit;
+          const result: ProviderResult = {
+            success: true,
+            response: retryData,
+            tokensUsed: totalTokens,
+            promptTokens: retryData.usage.prompt_tokens || 0,
+            completionTokens: retryData.usage.completion_tokens || 0,
+            creditsUsed,
+            creditSource,
+          };
+          result.tokens = newTokens;
+          return result;
+        }
+        const errText = await retryResponse.text();
+        return { success: false, error: `CodeBuddy China API error (${retryResponse.status}): ${errText}` };
       }
       if (response.status === 429) {
         return { success: false, error: "Rate limited / quota exhausted", quotaExhausted: true };
@@ -453,7 +630,26 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       const response = await this.makeRequest(apiKey, request, true);
 
       if (response.status === 401 || response.status === 403) {
-        return { success: false, error: "Session expired" };
+        const refreshResult = await this.refreshToken(account);
+        if (!refreshResult.success || !refreshResult.tokens) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyChinaTokens;
+        const newApiKey = this.getApiKey(newTokens);
+        if (!newApiKey) return { success: false, error: "Session expired, re-login required" };
+        const retryResponse = await this.makeRequest(newApiKey, request, true);
+        if (retryResponse.status === 401 || retryResponse.status === 403) {
+          return { success: false, error: "Session expired, re-login required" };
+        }
+        if (retryResponse.ok) {
+          const result = this.createStreamResponse(retryResponse, request.model);
+          if (result.success) {
+            result.tokens = newTokens;
+          }
+          return result;
+        }
+        const errText = await retryResponse.text();
+        return { success: false, error: `CodeBuddy China API error (${retryResponse.status}): ${errText}` };
       }
       if (response.status === 429) {
         return { success: false, error: "Rate limited", quotaExhausted: true };
@@ -470,9 +666,24 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   }
 
   async refreshToken(
-    _account: Account
+    account: Account
   ): Promise<{ success: boolean; tokens?: string; error?: string }> {
-    return { success: false, error: "CodeBuddy China uses static API keys — no refresh" };
+    const tokens = this.getTokens(account);
+    if (!tokens?.refresh_token) {
+      return { success: false, error: "No refresh token — re-login required" };
+    }
+    try {
+      const next = await refreshCodebuddyChinaToken(tokens.refresh_token);
+      const merged = {
+        ...tokens,
+        access_token: next.access_token,
+        refresh_token: next.refresh_token,
+        expires_at: next.expires_at,
+      };
+      return { success: true, tokens: JSON.stringify(merged) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   async validateAccount(account: Account): Promise<boolean> {
@@ -686,11 +897,14 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   ): Promise<Response> {
     const resolved = this.resolveModel(request.model);
     const headers = this.buildHeaders(apiKey, stream);
+    const kimiK3 = this.isKimiK3(resolved);
 
     // Clean messages: convert Anthropic-format (tool_use, tool_result, array content)
     // to OpenAI format (tool_calls, tool messages). Vision images stay INLINE in
     // content array (standard OpenAI format) — NOT hoisted to top-level fields.
-    const { messages, hasVision } = this.cleanMessages(request);
+    const { messages, hasVision } = this.cleanMessages(request, {
+      strictKimiVision: kimiK3,
+    });
 
     const body: Record<string, unknown> = {
       model: resolved,
@@ -705,11 +919,22 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       // upstream testing on real screenshots.
     }
 
-    if (request.max_tokens && request.max_tokens > 0) {
-      body.max_tokens = request.max_tokens;
-    }
-    if (request.temperature !== undefined) {
-      body.temperature = request.temperature;
+    if (kimiK3) {
+      // Kimi K3: fixed sampling (temp/top_p/n/penalties) — omit; thinking always on.
+      // max_completion_tokens default 131072, max 1048576. CBC may alias field.
+      if (request.max_tokens && request.max_tokens > 0) {
+        body.max_completion_tokens = Math.min(Math.max(1, request.max_tokens), 1_048_576);
+      }
+      if (request.reasoning_effort || request.thinking) {
+        body.reasoning_effort = "max";
+      }
+    } else {
+      if (request.max_tokens && request.max_tokens > 0) {
+        body.max_tokens = request.max_tokens;
+      }
+      if (request.temperature !== undefined) {
+        body.temperature = request.temperature;
+      }
     }
 
     // Normalize tools to OpenAI function-calling format

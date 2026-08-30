@@ -18,6 +18,10 @@
  *   compression_tsc_strip_schema_whitespace "true" | "false"
  *   compression_tsc_trim_descriptions       "true" | "false"
  *   compression_tsc_drop_schema_meta        "true" | "false"
+ *   compression_ponytail_enabled            "true" | "false"
+ *   compression_ponytail_mode               "lite" | "full" | "ultra"
+ *   compression_ponytail_provider_overrides JSON object {provider: bool}
+ *   compression_ponytail_strip_markers      "true" | "false"
  */
 
 import { db } from "../../db/index";
@@ -28,6 +32,7 @@ import {
   DEFAULT_DCP_WHITELIST,
   type CavemanLevel,
   type CompressionConfig,
+  type PonytailMode,
 } from "./types";
 
 const TTL_MS = 10_000;

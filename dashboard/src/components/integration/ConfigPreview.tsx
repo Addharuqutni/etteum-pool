@@ -1,4 +1,4 @@
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, ChevronDown, FileJson } from "lucide-react";
 import { useState } from "react";
 
 interface ConfigPreviewProps {
@@ -6,11 +6,10 @@ interface ConfigPreviewProps {
   label?: string;
 }
 
-export function ConfigPreview({ config, label }: ConfigPreviewProps) {
+export function ConfigPreview({ config, label = "Generated configuration" }: ConfigPreviewProps) {
   const [copied, setCopied] = useState(false);
-
-  const content =
-    typeof config === "string" ? config : JSON.stringify(config, null, 2);
+  const [open, setOpen] = useState(true);
+  const content = typeof config === "string" ? config : JSON.stringify(config, null, 2);
 
   const handleCopy = async () => {
     try {
@@ -23,28 +22,18 @@ export function ConfigPreview({ config, label }: ConfigPreviewProps) {
   };
 
   return (
-    <div className="space-y-1">
-      {label && (
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-[var(--muted-foreground)]">
-            {label}
-          </span>
-          <button
-            onClick={handleCopy}
-            className="p-1 rounded hover:bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-            title="Copy config"
-          >
-            {copied ? (
-              <Check className="w-3 h-3 text-[var(--success)]" />
-            ) : (
-              <Copy className="w-3 h-3" />
-            )}
-          </button>
-        </div>
-      )}
-      <pre className="px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-[11px] font-mono text-[var(--foreground)] overflow-x-auto whitespace-pre max-h-64 overflow-y-auto">
-        {content}
-      </pre>
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-[var(--secondary)]/60">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-w-0 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded">
+          <FileJson className="w-3.5 h-3.5 text-[var(--info)] shrink-0" />
+          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--foreground)] truncate">{label}</span>
+          <ChevronDown className={`w-3.5 h-3.5 text-[var(--muted-foreground)] transition-transform ${open ? "" : "-rotate-90"}`} />
+        </button>
+        <button type="button" onClick={handleCopy} className="p-1.5 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]" title="Copy generated configuration" aria-label="Copy generated configuration">
+          {copied ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+      {open && <pre className="px-3 py-3 text-[11px] leading-relaxed font-mono text-[var(--foreground)] overflow-x-auto whitespace-pre max-h-64 overflow-y-auto">{content}</pre>}
     </div>
   );
 }

@@ -10,7 +10,7 @@ from typing import Any
 from app.errors.codes import ErrorCode
 from app.errors.exceptions import NonRetryableBatcherError, RetryableBatcherError
 from app.providers.base import NormalizedAccount, ProviderAdapter
-from app.providers.kiro import (
+from app.providers.google_auth import (
     _fill_google_email_step,
     _fill_google_password_step,
     _handle_google_gaplustos,

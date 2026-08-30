@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import UsageChart from "./UsageChart";
 import { formatNumber, parseUtcDate, modelColor } from "@/lib/utils";
@@ -300,75 +300,99 @@ export default function TokenUsage({
   useWsEvent(["request_log", "request_error"], scheduleReload);
 
   return (
-    <Card className="border-[var(--border)]">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">Token Usage</CardTitle>
-          <Tabs value={period} onValueChange={setPeriod}>
-            <TabsList>
-              <TabsTrigger value="1d">1d</TabsTrigger>
-              <TabsTrigger value="7d">7d</TabsTrigger>
-              <TabsTrigger value="30d">30d</TabsTrigger>
-              <TabsTrigger value="all">All</TabsTrigger>
-            </TabsList>
-          </Tabs>
+    /* The chart is the primary surface of this view, so it — and only it —
+       carries elevation. Everything nested inside stays flat and is separated
+       by hairlines. */
+    <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
+      {/* Header doubles as the readout: the three totals live inline with the
+          title instead of in three identical boxes below it. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 border-b border-[var(--border)] px-4 py-3">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <div>
+            <div className="eyebrow">Tokens {period === "all" ? "all time" : period}</div>
+            <div className="mt-1 font-mono text-[26px] font-semibold leading-none tabular-nums text-[var(--foreground)]">
+              {formatNumber(stats.total)}
+            </div>
+          </div>
+          <dl className="flex items-end gap-5 pb-0.5">
+            <div>
+              <dt className="eyebrow">Prompt</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums text-[var(--foreground)]">
+                {formatNumber(stats.prompt)}
+              </dd>
+            </div>
+            <div>
+              <dt className="eyebrow">Completion</dt>
+              <dd className="mt-1 font-mono text-sm tabular-nums text-[var(--foreground)]">
+                {formatNumber(stats.completion)}
+              </dd>
+            </div>
+          </dl>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Summary cards */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Total</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.total)}</p>
-          </div>
-          <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Prompt</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.prompt)}</p>
-          </div>
-          <div className="rounded-lg bg-[var(--secondary)] p-4">
-            <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wide">Completion</p>
-            <p className="text-xl font-bold mt-1">{formatNumber(stats.completion)}</p>
-          </div>
-        </div>
+        <Tabs value={period} onValueChange={setPeriod}>
+          <TabsList>
+            <TabsTrigger value="1d">1d</TabsTrigger>
+            <TabsTrigger value="7d">7d</TabsTrigger>
+            <TabsTrigger value="30d">30d</TabsTrigger>
+            <TabsTrigger value="all">All</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
 
-        {/* Chart */}
-        <div>
-          <h4 className="text-sm font-medium text-[var(--muted-foreground)] mb-4">Token Usage Over Time</h4>
-          <UsageChart data={chartData} period={period} colorsByModel={colorsByModel} />
-        </div>
+      <div className="px-2 py-3 sm:px-3">
+        <UsageChart data={chartData} period={period} colorsByModel={colorsByModel} />
+      </div>
 
-        {/* By Model */}
+      {/* By model — a ledger, not eight stacked progress bars. The bar is a
+          hairline under each row so the numbers stay the loudest thing. */}
+      <div className="border-t border-[var(--border)]">
+        <div className="flex items-baseline justify-between px-4 pb-1 pt-3">
+          <h4 className="eyebrow">By model</h4>
+          <span className="eyebrow">Tokens · req</span>
+        </div>
         <div>
-          <h4 className="text-sm font-medium text-[var(--muted-foreground)] mb-4">By Model</h4>
-          <div className="space-y-3">
-            {modelUsage.map((model) => (
-              <div key={`${model.provider || "unknown"}/${model.model}`} className="space-y-1">
-                <div className="flex items-center justify-between gap-3 text-sm">
-                  <div className="min-w-0">
-                    <span className="text-[var(--foreground)]">{model.provider ? `${model.provider}/` : ""}{model.model}</span>
-                    <span className="ml-2 text-[10px] uppercase text-[var(--muted-foreground)]">{model.creditSource || "estimated"}</span>
-                  </div>
-                  <span className="shrink-0 text-[var(--muted-foreground)]">
-                    {formatNumber(model.tokens)} tokens · {model.requests || 0} req
-                  </span>
-                </div>
-                <div className="h-2 rounded-full bg-[var(--secondary)] overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all"
-                    style={{
-                      width: `${(Number(model.tokens || 0) / maxTokens) * 100}%`,
-                      backgroundColor: model.color,
-                    }}
-                  />
-                </div>
+          {modelUsage.map((model) => (
+            <div
+              key={`${model.provider || "unknown"}/${model.model}`}
+              className="group relative flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-4 py-2 transition-colors duration-150 ease-out hover:bg-[var(--secondary)]/40"
+            >
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span
+                  aria-hidden
+                  className="h-2.5 w-[3px] shrink-0 rounded-full"
+                  style={{ backgroundColor: model.color }}
+                />
+                <span className="truncate font-mono text-[12px] text-[var(--foreground)]">
+                  {model.provider ? `${model.provider}/` : ""}{model.model}
+                </span>
+                <span className="eyebrow hidden shrink-0 sm:inline">
+                  {model.creditSource || "estimated"}
+                </span>
               </div>
-            ))}
-            {modelUsage.length === 0 && (
-              <p className="text-sm text-[var(--muted-foreground)]">No model usage yet</p>
-            )}
-          </div>
+              <span className="shrink-0 font-mono text-[12px] tabular-nums text-[var(--muted-foreground)]">
+                <span className="text-[var(--foreground)]">{formatNumber(model.tokens)}</span>
+                {" · "}
+                {model.requests || 0}
+              </span>
+              {/* share-of-total rule, pinned to the row's bottom edge */}
+              <span
+                aria-hidden
+                className="absolute bottom-0 left-0 h-px"
+                style={{
+                  width: `${(Number(model.tokens || 0) / maxTokens) * 100}%`,
+                  backgroundColor: model.color,
+                  opacity: 0.55,
+                }}
+              />
+            </div>
+          ))}
+          {modelUsage.length === 0 && (
+            <p className="border-t border-[var(--hairline)] px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+              No token usage in this range.
+            </p>
+          )}
         </div>
-      </CardContent>
+      </div>
     </Card>
   );
 }

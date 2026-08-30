@@ -120,6 +120,25 @@ const reasoningEvents = [
 ];
 
 describe("CodexProvider streaming", () => {
+  test("maps latest Codex models to upstream IDs", async () => {
+    for (const [model, upstream] of [
+      ["codex-auto", "gpt-5.6-sol"],
+      ["codex-gpt-5.6", "gpt-5.6-sol"],
+      ["codex-gpt-5.6-sol", "gpt-5.6-sol"],
+      ["codex-gpt-5.6-terra", "gpt-5.6-terra"],
+      ["codex-gpt-5.6-luna", "gpt-5.6-luna"],
+    ] as const) {
+      const provider = new TestCodexProvider(() => codexResponse([
+        { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+      ]));
+      await provider.chatCompletion(account, {
+        model,
+        messages: [{ role: "user", content: "test" }],
+      });
+      expect(provider.lastRequestBody.model).toBe(upstream);
+    }
+  });
+
   test("OpenAI-compatible stream emits text deltas", async () => {
     const provider = new TestCodexProvider(() => codexResponse([
       { type: "response.output_text.delta", delta: "stream" },
@@ -137,6 +156,7 @@ describe("CodexProvider streaming", () => {
     const chunks = await collectOpenAIStream(result.stream!);
     expect(chunks.map((chunk) => chunk.choices[0].delta.content || "").join("")).toBe("stream-ok");
     expect(chunks.at(-1)?.choices[0].finish_reason).toBe("stop");
+    expect(chunks.at(-1)?.usage).toEqual({ prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 });
   });
 
   test("OpenAI-compatible stream emits tool_calls and forwards tools", async () => {

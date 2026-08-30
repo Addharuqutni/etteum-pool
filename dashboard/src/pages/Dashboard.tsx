@@ -1,13 +1,75 @@
 import StatsCards from "@/components/dashboard/StatsCards";
 import TokenUsage from "@/components/dashboard/TokenUsage";
+import { Card } from "@/components/ui/card";
+import PageHeader from "@/components/layout/PageHeader";
 import { useEffect, useRef, useState } from "react";
-import { fetchDashboardStats, fetchModelUsage } from "@/lib/api";
+import { fetchDashboardStats, fetchModelUsage, fetchBurnRate, type BurnRateItem } from "@/lib/api";
 import { modelColor } from "@/lib/utils";
+import { useApi } from "@/hooks/useApi";
 import { useWsEvent } from "@/hooks/useWebSocket";
+
+function providerLabel(provider: string): string {
+  return provider
+    .split("-")
+    .map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function compactNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return Math.round(n).toString();
+}
+
+function BurnRateStrip({ items }: { items: BurnRateItem[] }) {
+  if (!items || items.length === 0) return null;
+  const visible = items.slice(0, 10);
+  const hidden = items.length - visible.length;
+
+  return (
+    <Card
+      aria-label="Provider burn rate"
+      className="grid grid-cols-2 divide-x divide-y divide-[var(--border)] overflow-hidden sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5"
+    >
+      {visible.map((p) => {
+        let tone = "var(--muted-foreground)";
+        let value = "—";
+        if (p.quotaRemaining === 0) {
+          tone = "var(--error)";
+          value = "0d";
+        } else if (p.daysLeft !== null) {
+          value = `${p.daysLeft.toFixed(1)}d`;
+          tone =
+            p.daysLeft < 2 ? "var(--error)" : p.daysLeft < 7 ? "var(--warning)" : "var(--success)";
+        }
+        return (
+          <div key={p.provider} className="px-4 py-4">
+            <div className="eyebrow">{providerLabel(p.provider)}</div>
+            <div
+              className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
+              style={{ color: tone }}
+            >
+              {value}
+            </div>
+            <div className="mt-1.5 truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+              {compactNumber(p.creditsPerDay)}/day · {compactNumber(p.quotaRemaining)} left
+            </div>
+          </div>
+        );
+      })}
+      {hidden > 0 && (
+        <div className="flex items-end justify-end px-4 py-4">
+          <div className="font-mono text-[10px] text-[var(--muted-foreground)]">+{hidden} more</div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [modelStats, setModelStats] = useState<any[]>([]);
+  const burnRateApi = useApi<{ data: BurnRateItem[] }>(fetchBurnRate, []);
 
   async function load() {
     await Promise.all([
@@ -19,7 +81,7 @@ export default function Dashboard() {
   const reloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleReload = () => {
     if (reloadRef.current) clearTimeout(reloadRef.current);
-    reloadRef.current = setTimeout(() => { load(); }, 500);
+    reloadRef.current = setTimeout(() => { load(); burnRateApi.refetch(); }, 500);
   };
 
   useEffect(() => {
@@ -74,15 +136,23 @@ export default function Dashboard() {
   }));
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">Dashboard</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Overview of your proxy pool status
-        </p>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Dashboard"
+        meta={
+          <>
+            <span>{dashboardStats.accounts.active} active</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>{dashboardStats.requests.toLocaleString()} req</span>
+            <span aria-hidden className="text-[var(--border)]">·</span>
+            <span>all time</span>
+          </>
+        }
+      />
 
       <StatsCards data={dashboardStats} />
+
+      <BurnRateStrip items={burnRateApi.data?.data || []} />
 
       <TokenUsage stats={tokenStats} modelUsage={modelUsage} />
     </div>

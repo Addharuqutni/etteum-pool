@@ -9,6 +9,7 @@ import {
   getCompressionConfig,
   type CompressionStats,
 } from "./compression";
+import { scanPonytailMarkers } from "./compression/ponytail";
 
 export interface RouteResult {
   result: ProviderResult;
@@ -132,25 +133,46 @@ export async function routeRequest(
     }
   }
 
-  // Try up to 3 accounts before giving up
-  const maxRetries = 3;
   let lastError = "";
-  const attemptedByokAccountIds = new Set<number>();
+  const attemptedAccountIds = new Set<number>();
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     // BYOK uses prefix-based account lookup (not the generic pool),
     // so it can also find error-status accounts and retry them.
     const account = providerName === "byok"
       ? (await pool.getAccountForModel(compressedRequest.model, {
-          excludeAccountIds: attemptedByokAccountIds,
-        }))?.account ?? null
-      : await pool.getNextAccount(providerName);
+           excludeAccountIds: attemptedAccountIds,
+         }))?.account ?? null
+      : await pool.getNextAccount(providerName, attemptedAccountIds);
     if (!account) {
+      if (attemptedAccountIds.size > 0) break;
+      // Build a descriptive reason so the client knows WHY no account is
+      // available (no accounts vs all exhausted vs all disabled vs all error).
+      let reason = "no active account available";
+      try {
+        const stats = await pool.getStatsByProvider(providerName);
+        if (stats.total === 0) {
+          reason = "no accounts configured for this provider";
+        } else if (stats.active === 0) {
+          const parts: string[] = [];
+          if (stats.exhausted > 0) parts.push(`${stats.exhausted} exhausted`);
+          if (stats.error > 0) parts.push(`${stats.error} in error state`);
+          if (stats.disabled > 0) parts.push(`${stats.disabled} disabled`);
+          if (stats.pending > 0) parts.push(`${stats.pending} pending`);
+          reason = parts.length > 0
+            ? `all accounts unavailable (${parts.join(", ")})`
+            : `no active account available (total: ${stats.total})`;
+        } else {
+          reason = `no active account available (total: ${stats.total}, active: ${stats.active})`;
+        }
+      } catch {
+        // Stats query failed — fall back to generic message.
+      }
       throw new Error(
-        `No active accounts available for provider: ${providerName}`
+        `No active accounts available for provider "${providerName}": ${reason}`
       );
     }
-    if (providerName === "byok") attemptedByokAccountIds.add(account.id);
+    attemptedAccountIds.add(account.id);
 
     const startTime = Date.now();
     let tracked = false;
@@ -170,6 +192,18 @@ export async function routeRequest(
           await pool.updateTokens(account.id, result.tokens);
         }
         await pool.markUsed(account.id);
+        // Scan response for ponytail: markers (output compression telemetry).
+        const ponytailScan = scanPonytailMarkers(result.response);
+        if (ponytailScan.markers.length > 0) {
+          compressionStats.ponytail = {
+            inputOverhead: compressionStats.byTechnique.ponytail ?? 0,
+            outputMarkers: ponytailScan.markers.length,
+            markerHits: ponytailScan.markers,
+          };
+          if (ponytailScan.strippedResponse) {
+            result.response = ponytailScan.strippedResponse as any;
+          }
+        }
         return { result, account, provider: providerName, durationMs, compressionStats };
       }
 
@@ -227,6 +261,18 @@ export async function routeRequest(
 
           if (retryResult.success) {
             await pool.markUsed(account.id);
+            // Scan retry response for ponytail: markers.
+            const ponytailScan = scanPonytailMarkers(retryResult.response);
+            if (ponytailScan.markers.length > 0) {
+              compressionStats.ponytail = {
+                inputOverhead: compressionStats.byTechnique.ponytail ?? 0,
+                outputMarkers: ponytailScan.markers.length,
+                markerHits: ponytailScan.markers,
+              };
+              if (ponytailScan.strippedResponse) {
+                retryResult.response = ponytailScan.strippedResponse as any;
+              }
+            }
             return {
               result: retryResult,
               account,
@@ -272,7 +318,7 @@ export async function routeRequest(
   }
 
   throw new Error(
-    `All accounts failed for ${providerName}. Last error: ${lastError}`
+    `All account attempt(s) failed for provider "${providerName}". Last error: ${lastError}`
   );
 }
 

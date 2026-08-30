@@ -1,4 +1,5 @@
 import TokenUsage from "@/components/dashboard/TokenUsage";
+import PageHeader from "@/components/layout/PageHeader";
 import { useEffect, useState, useRef } from "react";
 import { fetchDashboardStats, fetchModelUsage } from "@/lib/api";
 import { modelColor } from "@/lib/utils";
@@ -48,13 +49,11 @@ export default function Usage() {
   }));
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--foreground)]">Usage</h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Detailed token and credit usage analytics
-        </p>
-      </div>
+    <div className="space-y-4">
+      <PageHeader
+        title="Usage"
+        meta={`${modelUsage.length} model${modelUsage.length === 1 ? "" : "s"} · tokens and credits`}
+      />
 
       <TokenUsage stats={tokenStats} modelUsage={modelUsage} />
     </div>

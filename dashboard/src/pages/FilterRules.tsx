@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import PageHeader from "@/components/layout/PageHeader";
 import { Filter, Plus, Trash2, Power, PowerOff, Pencil, X } from "lucide-react";
 import { fetchApi } from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
@@ -118,175 +120,164 @@ export default function FilterRules() {
   const truncate = (s: string, n = 60) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--foreground)]">Filter Rules</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Pre-request sanitizer rules to strip patterns that trigger upstream content moderation
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {data.activeCount}/{data.count} active
-          </span>
+    <div className="space-y-4">
+      <PageHeader
+        title="Filter Rules"
+        meta={`${data.activeCount} of ${data.count} active · pre-request sanitizer`}
+        actions={
           <Button size="sm" onClick={() => setForm({ ...emptyForm })}>
-            <Plus className="w-3 h-3 mr-1" />
-            Add Rule
+            <Plus className="w-3.5 h-3.5" /> New rule
           </Button>
-        </div>
-      </div>
+        }
+      />
 
       {message && (
-        <div className="px-4 py-2 rounded-md bg-[var(--secondary)] text-sm text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
           {message}
-        </div>
+        </p>
       )}
 
       {form && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Filter className="w-4 h-4" />
-              {form.id == null ? "New Rule" : "Edit Rule"}
-            </CardTitle>
-            <Button variant="ghost" size="sm" onClick={() => setForm(null)}>
+        <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
+          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+            <h2 className="eyebrow flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5" />
+              {form.id == null ? "New rule" : `Edit rule`}
+            </h2>
+            <button
+              onClick={() => setForm(null)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+              aria-label="Discard"
+            >
               <X className="w-4 h-4" />
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-3">
+            </button>
+          </div>
+          <div className="space-y-3 px-4 py-3">
             <div>
-              <label className="text-xs font-medium text-[var(--muted-foreground)] mb-1 block">Pattern</label>
+              <label htmlFor="rule-pattern" className="eyebrow mb-1.5 block">Pattern</label>
               <textarea
-                className="w-full h-[80px] px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                placeholder={form.isRegex ? "regex pattern (case-insensitive)" : "exact string to match"}
+                id="rule-pattern"
+                className="h-[76px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                placeholder={form.isRegex ? "regex, case-insensitive" : "exact string to match"}
                 value={form.pattern}
                 onChange={(e) => setForm({ ...form, pattern: e.target.value })}
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-[var(--muted-foreground)] mb-1 block">Replacement</label>
+              <label htmlFor="rule-replacement" className="eyebrow mb-1.5 block">Replacement</label>
               <textarea
-                className="w-full h-[60px] px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] text-sm font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                placeholder="(empty to remove the matched text)"
+                id="rule-replacement"
+                className="h-[56px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                placeholder="empty removes the match"
                 value={form.replacement}
                 onChange={(e) => setForm({ ...form, replacement: e.target.value })}
               />
             </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
                 <input
                   type="checkbox"
+                  className="accent-[var(--primary)]"
                   checked={form.isRegex}
                   onChange={(e) => setForm({ ...form, isRegex: e.target.checked })}
                 />
                 Regex
               </label>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
                 <input
                   type="checkbox"
+                  className="accent-[var(--primary)]"
                   checked={form.isActive}
                   onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
                 />
                 Active
               </label>
+              <div className="ml-auto flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setForm(null)}>Cancel</Button>
+                <Button size="sm" onClick={handleSave}>Save</Button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <Button onClick={handleSave}>Save</Button>
-              <Button variant="outline" onClick={() => setForm(null)}>Cancel</Button>
-            </div>
-          </CardContent>
+          </div>
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Filter className="w-4 h-4" />
-            Rules ({data.count})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <p className="text-sm text-[var(--muted-foreground)]">Loading...</p>
-          ) : data.rules.length === 0 ? (
-            <p className="text-sm text-[var(--muted-foreground)]">No rules. Click Add Rule to create one.</p>
-          ) : (
-            <div className="space-y-2">
-              {data.rules.map((rule) => (
-                <div
-                  key={rule.id}
-                  className="flex items-center justify-between px-4 py-3 rounded-md bg-[var(--secondary)]"
-                >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <span className="text-xs text-[var(--muted-foreground)] shrink-0 w-8">
-                      #{rule.sortOrder}
+      {/* Rules read as an ordered pipeline, so they're a numbered list with
+          hairlines — not a stack of individually boxed cards. */}
+      <Card className="overflow-hidden">
+        {loading ? (
+          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+        ) : data.rules.length === 0 ? (
+          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+            No rules yet — add one to strip patterns before they reach the provider.
+          </p>
+        ) : (
+          <div>
+            {data.rules.map((rule) => (
+              <div
+                key={rule.id}
+                className={`flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-3 py-2 transition-colors duration-150 ease-out first:border-t-0 hover:bg-[var(--secondary)]/40 ${rule.isActive ? "" : "opacity-55"}`}
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-2.5 font-mono text-[12px]">
+                  <span className="w-7 shrink-0 tabular-nums text-[var(--muted-foreground)]">{rule.sortOrder}</span>
+                  <span
+                    aria-hidden
+                    className="h-3 w-[2px] shrink-0 rounded-full"
+                    style={{ backgroundColor: rule.isActive ? "var(--success)" : "var(--border)" }}
+                    title={rule.isActive ? "active" : "disabled"}
+                  />
+                  <span className="hidden w-28 shrink-0 truncate text-[var(--muted-foreground)] lg:inline">{rule.ruleId}</span>
+                  <Badge variant={rule.isRegex ? "info" : "secondary"}>{rule.isRegex ? "regex" : "string"}</Badge>
+                  <span className="min-w-0 flex-1 truncate text-[var(--foreground)]" title={rule.pattern}>
+                    {truncate(rule.pattern)}
+                  </span>
+                  {rule.replacement && (
+                    <span className="hidden shrink-0 truncate text-[var(--muted-foreground)] sm:inline" title={rule.replacement}>
+                      → {truncate(rule.replacement, 24)}
                     </span>
-                    <span className="font-mono text-xs text-[var(--muted-foreground)] shrink-0 w-32 truncate">
-                      {rule.ruleId}
-                    </span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded shrink-0 ${
-                        rule.isRegex ? "bg-[var(--info)]/10 text-[var(--info)]" : "bg-[var(--primary)]/10 text-[var(--primary)]"
-                      }`}
-                    >
-                      {rule.isRegex ? "regex" : "string"}
-                    </span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded shrink-0 ${
-                        rule.isActive ? "bg-[var(--success)]/10 text-[var(--success)]" : "bg-[var(--muted)]/10 text-[var(--muted-foreground)]"
-                      }`}
-                    >
-                      {rule.isActive ? "active" : "off"}
-                    </span>
-                    <span className="font-mono text-sm truncate text-[var(--foreground)]" title={rule.pattern}>
-                      {truncate(rule.pattern)}
-                    </span>
-                    {rule.replacement && (
-                      <span className="font-mono text-xs text-[var(--muted-foreground)] truncate shrink-0" title={rule.replacement}>
-                        → {truncate(rule.replacement, 30)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleToggle(rule)}
-                      title={rule.isActive ? "Disable" : "Enable"}
-                    >
-                      {rule.isActive ? <PowerOff className="w-3 h-3" /> : <Power className="w-3 h-3" />}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        setForm({
-                          id: rule.id,
-                          pattern: rule.pattern,
-                          replacement: rule.replacement,
-                          isRegex: rule.isRegex,
-                          isActive: rule.isActive,
-                        })
-                      }
-                      title="Edit"
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(rule)}
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
+                <div className="flex shrink-0 items-center">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleToggle(rule)}
+                    title={rule.isActive ? "Disable" : "Enable"}
+                    aria-label={rule.isActive ? "Disable rule" : "Enable rule"}
+                  >
+                    {rule.isActive ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() =>
+                      setForm({
+                        id: rule.id,
+                        pattern: rule.pattern,
+                        replacement: rule.replacement,
+                        isRegex: rule.isRegex,
+                        isActive: rule.isActive,
+                      })
+                    }
+                    title="Edit"
+                    aria-label="Edit rule"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDelete(rule)}
+                    title="Delete"
+                    aria-label="Delete rule"
+                    className="hover:text-[var(--destructive)]"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );

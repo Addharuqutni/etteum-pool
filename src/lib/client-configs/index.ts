@@ -98,13 +98,25 @@ export async function applyClientConfig(
 
 /**
  * Apply configs to all detected clients.
+ *
+ * Accepts either a single `ProxyConnectionInfo` (shared across all clients,
+ * backward-compatible) or a factory `(clientId) => ProxyConnectionInfo` so
+ * each client can receive its own subset of models.
  */
 export async function applyAllClients(
-  info: ProxyConnectionInfo
+  infoOrFactory:
+    | ProxyConnectionInfo
+    | ((clientId: ClientTarget) => Promise<ProxyConnectionInfo>)
 ): Promise<ClientConfigResult[]> {
   const detected = detectInstalledClients();
   const targets = (Object.keys(detected) as ClientTarget[]).filter((id) => detected[id]);
-  return Promise.all(targets.map((id) => applyClientConfig(id, info)));
+  const isFactory = typeof infoOrFactory === "function";
+  return Promise.all(
+    targets.map(async (id) => {
+      const info = isFactory ? await infoOrFactory(id) : infoOrFactory;
+      return applyClientConfig(id, info);
+    })
+  );
 }
 
 // Re-export types for consumers

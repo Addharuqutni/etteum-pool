@@ -213,6 +213,47 @@ export async function fetchModels() {
   return fetchApi("/v1/models");
 }
 
+// ── Model Combos ────────────────────────────────────────────
+
+export interface ComboDTO {
+  id: number;
+  name: string;
+  targets: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchCombos(): Promise<{ data: ComboDTO[] }> {
+  return fetchApi("/api/combos");
+}
+
+export async function createCombo(payload: {
+  name: string;
+  targets: string[];
+}): Promise<{ data: ComboDTO }> {
+  return fetchApi("/api/combos", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCombo(
+  id: number,
+  payload: { name?: string; targets?: string[]; enabled?: boolean }
+): Promise<{ data: ComboDTO }> {
+  return fetchApi(`/api/combos/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCombo(
+  id: number
+): Promise<{ data: { ok: true } }> {
+  return fetchApi(`/api/combos/${id}`, { method: "DELETE" });
+}
+
 export interface ModelMappingDTO {
   id?: number;
   sourcePattern: string;
@@ -277,6 +318,8 @@ export interface IntegrationModelDTO {
 export interface IntegrationClientsData {
   clients: ClientMetaDTO[];
   models: IntegrationModelDTO[];
+  /** Per-client selected model subset. `null` means "not yet saved" (→ all models). */
+  clientModelSelections: Record<string, string[] | null>;
 }
 
 export interface ClientConfigPreviewDTO {
@@ -308,32 +351,45 @@ export async function fetchIntegrationClients(): Promise<IntegrationClientsData>
 export async function fetchClientConfigPreview(
   clientId: string,
   baseUrl: string,
-  modelId?: string
+  modelId?: string,
+  selectedModels?: string[]
 ): Promise<ClientConfigPreviewDTO> {
   return fetchApi(`/api/integration/clients/${clientId}/preview`, {
     method: "POST",
-    body: JSON.stringify({ baseUrl, modelId }),
+    body: JSON.stringify({ baseUrl, modelId, selectedModels }),
   });
 }
 
 export async function applyClientConfig(
   clientId: string,
   baseUrl: string,
-  modelId?: string
+  modelId?: string,
+  selectedModels?: string[]
 ): Promise<ApplyClientResult> {
   return fetchApi(`/api/integration/clients/${clientId}/apply`, {
     method: "POST",
-    body: JSON.stringify({ baseUrl, modelId }),
+    body: JSON.stringify({ baseUrl, modelId, selectedModels }),
   });
 }
 
 export async function applyAllClients(
   baseUrl: string,
-  modelId?: string
+  modelId?: string,
+  clientModelSelections?: Record<string, string[]>
 ): Promise<ApplyAllResult> {
   return fetchApi("/api/integration/apply-all", {
     method: "POST",
-    body: JSON.stringify({ baseUrl, modelId }),
+    body: JSON.stringify({ baseUrl, modelId, clientModelSelections }),
+  });
+}
+
+export async function saveClientSelectedModels(
+  clientId: string,
+  models: string[]
+): Promise<{ success: boolean; clientId: string; models: string[] }> {
+  return fetchApi(`/api/integration/clients/${clientId}/models`, {
+    method: "PUT",
+    body: JSON.stringify({ models }),
   });
 }
 
@@ -354,6 +410,42 @@ export async function updateSettings(settings: Record<string, string>) {
     method: "PUT",
     body: JSON.stringify(settings),
   });
+}
+
+export async function fetchAlertSettings() {
+  return fetchApi("/api/alerts/settings");
+}
+
+export async function updateAlertSettings(settings: Record<string, string>) {
+  return fetchApi("/api/alerts/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function sendTestAlert(): Promise<{
+  data: {
+    ok: boolean;
+    results: {
+      webhook?: { ok: boolean; error?: string };
+      telegram?: { ok: boolean; error?: string };
+    };
+  };
+}> {
+  return fetchApi("/api/alerts/test", { method: "POST" });
+}
+
+export interface BurnRateItem {
+  provider: string;
+  quotaLimit: number;
+  quotaRemaining: number;
+  credits7d: number;
+  creditsPerDay: number;
+  daysLeft: number | null;
+}
+
+export async function fetchBurnRate(): Promise<{ data: BurnRateItem[] }> {
+  return fetchApi("/api/alerts/burn-rate");
 }
 
 export async function fetchProviderList(): Promise<{ data: string[] }> {
@@ -424,10 +516,6 @@ export async function loginAllAccounts(options?: { headless?: boolean; concurren
     method: "POST",
     body: JSON.stringify(options || {}),
   });
-}
-
-export async function openPanel(id: number) {
-  return fetchApi(`/api/accounts/${id}/open-panel`, { method: "POST" });
 }
 
 export async function stopAccount(id: number) {
@@ -756,6 +844,131 @@ export async function completeCodexOAuthCallbackUrl(callbackUrl: string) {
   return completeCodexOAuth({ code, state });
 }
 
+export interface GrokCliDeviceCodeResponse {
+  state: string;
+  flowType: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string | null;
+  interval: number;
+  expiresIn: number;
+}
+
+export interface GrokCliOAuthStatusResponse {
+  status: string;
+  error?: string;
+  interval?: number;
+  userCode?: string;
+  verificationUri?: string;
+  connection?: {
+    id: number;
+    provider: string;
+    email: string;
+    displayName: string;
+  };
+}
+
+export async function startGrokCliDeviceCode(): Promise<GrokCliDeviceCodeResponse> {
+  return fetchApi("/api/oauth/grok-cli/device-code");
+}
+
+export async function pollGrokCliOAuth(state: string): Promise<GrokCliOAuthStatusResponse> {
+  return fetchApi("/api/oauth/grok-cli/poll", {
+    method: "POST",
+    body: JSON.stringify({ state }),
+  });
+}
+
+export async function cancelGrokCliOAuth(state?: string) {
+  return fetchApi("/api/oauth/grok-cli/cancel", {
+    method: "POST",
+    body: JSON.stringify(state ? { state } : {}),
+  });
+}
+
+export interface CodebuddyDeviceCodeResponse {
+  state: string;
+  flowType: string;
+  authUrl: string;
+  interval: number;
+}
+
+export interface CodebuddyOAuthStatusResponse {
+  status: string;
+  error?: string;
+  connection?: {
+    id: number;
+    provider: string;
+    email: string;
+    displayName: string;
+  };
+}
+
+export async function startCodebuddyDeviceCode(): Promise<CodebuddyDeviceCodeResponse> {
+  return fetchApi("/api/oauth/codebuddy/device-code");
+}
+
+export async function pollCodebuddyOAuth(state: string): Promise<CodebuddyOAuthStatusResponse> {
+  return fetchApi("/api/oauth/codebuddy/poll", {
+    method: "POST",
+    body: JSON.stringify({ state }),
+  });
+}
+
+export async function cancelCodebuddyOAuth(state?: string) {
+  return fetchApi("/api/oauth/codebuddy/cancel", {
+    method: "POST",
+    body: JSON.stringify(state ? { state } : {}),
+  });
+}
+
+export interface ClaudeAuthorizeResponse {
+  authUrl: string;
+  state: string;
+  codeVerifier: string;
+  codeChallenge: string;
+  flowType: string;
+  pasteHint?: string;
+}
+
+export interface ClaudeOAuthStatusResponse {
+  status: string;
+  error?: string;
+  authUrl?: string;
+  connection?: {
+    id: number;
+    provider: string;
+    email: string;
+    displayName: string;
+    plan?: string | null;
+  };
+}
+
+export async function startClaudeOAuth(): Promise<ClaudeAuthorizeResponse> {
+  return fetchApi("/api/oauth/claude/authorize");
+}
+
+export async function completeClaudeOAuth(input: {
+  state: string;
+  code: string;
+}): Promise<{ success: boolean; connection?: ClaudeOAuthStatusResponse["connection"] }> {
+  return fetchApi("/api/oauth/claude/complete", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function pollClaudeOAuthStatus(state: string): Promise<ClaudeOAuthStatusResponse> {
+  return fetchApi(`/api/oauth/claude/poll-status?state=${encodeURIComponent(state)}`);
+}
+
+export async function cancelClaudeOAuth(state?: string) {
+  return fetchApi("/api/oauth/claude/cancel", {
+    method: "POST",
+    body: JSON.stringify(state ? { state } : {}),
+  });
+}
+
 // BYOK (Bring Your Own Key) API functions
 export interface ByokKeyInfo {
   id?: number;
@@ -849,5 +1062,17 @@ export async function testByokProvider(
   return fetchApi(`/api/accounts/byok/${id}/test`, {
     method: "POST",
     body: JSON.stringify(model ? { model } : {})
+  });
+}
+
+export async function fetchByokModels(data: {
+  base_url: string;
+  api_key: string;
+  format?: "openai" | "anthropic" | "auto";
+  headers?: Record<string, string>;
+}): Promise<{ models: string[]; error?: string }> {
+  return fetchApi("/api/accounts/byok/fetch-models", {
+    method: "POST",
+    body: JSON.stringify(data),
   });
 }

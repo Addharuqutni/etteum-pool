@@ -269,14 +269,14 @@ async function testOpenAIToolStream() {
 }
 
 async function testCrossModelOpenAI() {
-  console.log("\n--- OpenAI /v1/chat/completions: cross-model (non-duo provider) ---");
-  // Try first available non-gitlab-duo openai-compatible model (gpt-* style)
+  console.log("\n--- OpenAI /v1/chat/completions: cross-model ---");
+  // Try first available openai-compatible model (gpt-* style)
   const acc: any = await fetch(`${BASE}/v1/models`, { headers: { "authorization": `Bearer ${KEY}` } }).then(r => r.json()).catch(() => null);
   const arr = acc?.data || acc || [];
   const candidate = (Array.isArray(arr) ? arr : []).find((m: any) =>
-    (m.owned_by !== "gitlab-duo") && /sonnet|haiku|opus|gpt-|claude-/i.test(m.id || ""));
+    /sonnet|haiku|opus|gpt-|claude-/i.test(m.id || ""));
   if (!candidate) {
-    check("OpenAI cross-model: candidate model exists", false, "no non-duo model found");
+    check("OpenAI cross-model: candidate model exists", false, "no compatible model found");
     return;
   }
   const { status, events } = await readSSE(`${BASE}/v1/chat/completions`, {
