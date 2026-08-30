@@ -1,12 +1,14 @@
 # Etteum Pool (Private)
 
-**AI Proxy Pool for Multiple Providers** — Load balancing, auto-warmup, and credit tracking for Kiro, CodeBuddy, Codex, Canva, Qoder, **GitLab Duo**, and **YouMind** accounts.
+**AI Proxy Pool for Multiple Providers** — Load balancing, auto-warmup, credit tracking, and token compression for CodeBuddy, Codex, Canva, **Claude** (OAuth), and **Grok CLI** accounts.
 
-> 🔒 **This is the PRIVATE repository.** It includes extra providers (GitLab Duo, YouMind) and debug tooling that are not in the public release at [`etteum-pool`](https://github.com/priyo000/etteum-pool). All install instructions below assume you have SSH access configured for `git@github.com:priyo000/etteum.git`.
+> 🔒 **This is a PRIVATE repository.** All install instructions below assume you have SSH access configured for `git@github.com:priyo000/etteum.git`.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bun](https://img.shields.io/badge/Bun-1.x-000000?logo=bun)](https://bun.sh)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+
+![Etteum Pool Dashboard](docs/screenshots/dashboard.png)
 
 ---
 
@@ -152,9 +154,9 @@ etteum help               # Full command reference
 1. Open the dashboard at **http://localhost:1931**
 2. Go to **Accounts** → click **Add Account** for your provider
 3. Pick your method:
-   - **Bulk Import** — paste `email|password` lines (recommended)
-   - **Instant Login** — refresh tokens (Kiro Pro, Codex)
-   - **PAT Token** — Personal Access Token (Qoder)
+   - **Bulk Import** — paste `email|password` lines (CodeBuddy, Canva)
+   - **OAuth** — browser flow (Claude, CodeBuddy) or device code (Grok CLI)
+   - **Instant Login** — refresh tokens (Codex)
    - **API Key** — for `byok` and `codebuddy-china` providers
 
 ### Auto-warmup
@@ -192,7 +194,6 @@ HEADLESS=true
 
 # Optional
 PROXY_URL=                   # Global outbound proxy
-KIRO_PRO_UPGRADE=false       # Enable Kiro Pro features
 ```
 
 | Variable          | Default                       | Description                              |
@@ -205,7 +206,6 @@ KIRO_PRO_UPGRADE=false       # Enable Kiro Pro features
 | `PYTHON_PATH`     | empty (auto-detect)           | Override venv Python — leave empty       |
 | `BROWSER_ENGINE`  | `camoufox`                    | `camoufox` (anti-detect) or `chromium`   |
 | `PROXY_URL`       | empty                         | Outbound proxy for the auth bot          |
-| `KIRO_PRO_UPGRADE`| `false`                       | Auto-upgrade Kiro accounts to Pro        |
 
 ---
 
@@ -382,26 +382,52 @@ etteum update
 
 | Provider          | Auth Method      | Notes                                |
 |-------------------|------------------|--------------------------------------|
-| **Kiro**          | Email/Password   | Claude Sonnet, free tier             |
-| **Kiro Pro**      | Refresh Token    | Claude Opus, higher limits           |
+| **Claude**        | OAuth            | Claude Pro/Max subscriptions; `cc-*` model ids |
+| **Grok CLI**      | Device-code OAuth| Grok Build / xAI; `grok-4.5*` models |
 | **CodeBuddy**     | Email/Password   | Multiple models, Tencent Cloud       |
 | **CodeBuddy CN**  | API Key          | China region, vision support         |
-| **Codex**         | OAuth/Token      | OpenAI / GPT-4o                      |
+| **Codex**         | OAuth/Token      | OpenAI / GPT-5-Codex                 |
 | **Canva**         | Email/Password   | Image generation (Flux Pro)          |
-| **Qoder**         | PAT Token        | Claude models, 1M context, free tier |
-| **GitLab Duo** 🔒 | PAT Token        | GitLab AI; private build only        |
-| **YouMind** 🔒    | API Key          | Private build only                   |
-| **BYOK**          | API Key          | Bring your own keys (any compatible) |
+| **BYOK**          | API Key          | Bring your own keys — multiple keys per provider, round-robin |
 
 ### Request flow
 
 ```
 client → /v1/chat/completions → load balancer → provider adapter → provider
-                                       ↓
-                           dashboard (WebSocket updates)
-                                       ↓
-                           auto-warmup (periodic health checks)
+                                        ↓
+                            dashboard (WebSocket updates)
+                                        ↓
+                            auto-warmup (periodic health checks)
 ```
+
+### Token compression pipeline
+
+Before a request reaches the provider, it passes through a lossless, provider-agnostic
+compression pipeline (3–13ms overhead) that cuts input token spend:
+
+| Technique | Target | What it does |
+|-----------|--------|--------------|
+| **TSC** (Tool Schema Compaction) | `tools[]` array | Strips JSON-Schema metadata and whitespace the model never reads |
+| **RTK** (shape filters) | tool results | Detects `git-diff`, `git-status`, `tree`, `read-numbered`, `grep`, logs and keeps only the informative parts |
+| **DCP** (Dedup Context Pruning) | messages | Collapses repeated identical tool outputs across turns |
+| **Caveman** | system prompt | Compresses verbose system prompts |
+| **Ponytail** | system prompt | Injects a "lazy senior dev" ruleset — small input overhead, pays back as shorter outputs and fewer tool calls; `ponytail:` markers in responses are tracked |
+
+Per-request savings are visible on the **Requests** page in the dashboard, anchored to the
+provider-reported `prompt_tokens`.
+
+### Combos (fallback model chains)
+
+A **combo** is a virtual model name that resolves to an ordered list of real models.
+The proxy tries each target in turn and falls back to the next on failure — point your
+client at one combo name instead of juggling provider outages yourself. Managed on the
+**Combos** page in the dashboard.
+
+### Alerts
+
+Optional notifications (generic webhook and/or Telegram) for account errors, low credits,
+high error rate, and an empty proxy pool. Thresholds and cooldowns are configurable in
+**Settings** — disabled by default.
 
 ---
 
@@ -423,7 +449,7 @@ etteum-pool/
 │   ├── api/              # API routes (Hono)
 │   ├── auth/             # Login automation & warmup
 │   ├── db/               # Schema & migrations
-│   ├── proxy/            # Provider implementations
+│   ├── proxy/            # Provider implementations + compression pipeline
 │   └── ws/               # WebSocket server
 ├── dashboard/            # React + Vite + Tailwind
 ├── scripts/
