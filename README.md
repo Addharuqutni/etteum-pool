@@ -476,5 +476,3 @@ MIT License — see [LICENSE](LICENSE).
 - **Issues:** [GitHub Issues](https://github.com/priyo000/etteum/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/priyo000/etteum/discussions)
 - **Public mirror (no GitLab Duo / YouMind):** [`priyo000/etteum-pool`](https://github.com/priyo000/etteum-pool)
-
-**Made with ❤️ for the AI community**
