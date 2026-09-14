@@ -10,6 +10,7 @@ import {
   type CompressionStats,
 } from "./compression";
 import { scanPonytailMarkers } from "./compression/ponytail";
+import { stickyStore, computeStickyKey } from "./sticky";
 
 export interface RouteResult {
   result: ProviderResult;
@@ -136,14 +137,30 @@ export async function routeRequest(
   let lastError = "";
   const attemptedAccountIds = new Set<number>();
 
+  // Cache-affine sticky routing: when the request carries a stable session
+  // anchor (model + user/first-message), prefer the account that served the
+  // previous turn so provider prompt caches hit. BYOK uses prefix-based
+  // lookup and is deliberately excluded.
+  const stickyKey =
+    providerName !== "byok" ? computeStickyKey(sanitizedRequest.model, sanitizedRequest) : null;
+
   for (let attempt = 0; ; attempt++) {
-    // BYOK uses prefix-based account lookup (not the generic pool),
-    // so it can also find error-status accounts and retry them.
-    const account = providerName === "byok"
-      ? (await pool.getAccountForModel(compressedRequest.model, {
-           excludeAccountIds: attemptedAccountIds,
-         }))?.account ?? null
-      : await pool.getNextAccount(providerName, attemptedAccountIds);
+    let account: Account | null = null;
+    if (attempt === 0 && stickyKey) {
+      const stickyAccountId = stickyStore.get(stickyKey, providerName);
+      if (stickyAccountId !== null && !attemptedAccountIds.has(stickyAccountId)) {
+        account = await pool.getStickyAccount(providerName, stickyAccountId);
+      }
+    }
+    if (!account) {
+      // BYOK uses prefix-based account lookup (not the generic pool),
+      // so it can also find error-status accounts and retry them.
+      account = providerName === "byok"
+        ? (await pool.getAccountForModel(compressedRequest.model, {
+             excludeAccountIds: attemptedAccountIds,
+           }))?.account ?? null
+        : await pool.getNextAccount(providerName, attemptedAccountIds);
+    }
     if (!account) {
       if (attemptedAccountIds.size > 0) break;
       // Build a descriptive reason so the client knows WHY no account is
@@ -192,16 +209,20 @@ export async function routeRequest(
           await pool.updateTokens(account.id, result.tokens);
         }
         await pool.markUsed(account.id);
+        // Success clears any 429 cooldown and (re)pins this account to the
+        // conversation so follow-up turns hit the same provider prompt cache.
+        pool.clearRateLimitCooldown(account.id);
+        if (stickyKey) stickyStore.set(stickyKey, account.id, providerName);
         // Scan response for ponytail: markers (output compression telemetry).
         const ponytailScan = scanPonytailMarkers(result.response);
-        if (ponytailScan.markers.length > 0) {
+        if (compressionStats && ponytailScan.markers.length > 0) {
           compressionStats.ponytail = {
             inputOverhead: compressionStats.byTechnique.ponytail ?? 0,
             outputMarkers: ponytailScan.markers.length,
             markerHits: ponytailScan.markers,
           };
           if (ponytailScan.strippedResponse) {
-            result.response = ponytailScan.strippedResponse as any;
+            result.response = ponytailScan.strippedResponse as ProviderResult["response"];
           }
         }
         return { result, account, provider: providerName, durationMs, compressionStats };
@@ -217,8 +238,12 @@ export async function routeRequest(
         throw new Error(result.error || `Invalid model: ${compressedRequest.model}`);
       }
 
-      // Handle rate limiting (429) — temporary, don't mark exhausted
+      // Handle rate limiting (429) — temporary, don't mark exhausted. The
+      // graduated in-memory cooldown (30s→5min ladder) applies so repeated
+      // 429s back off instead of hammering the same account.
       if (result.rateLimited) {
+        pool.markRateLimited(account.id);
+        if (stickyKey) stickyStore.delete(stickyKey);
         lastError = result.error || "Rate limited";
         continue; // Try next account without poisoning this one
       }
@@ -226,13 +251,13 @@ export async function routeRequest(
       // Handle quota exhaustion (402 / 403 without PAYG).
       //
       // Trust upstream: if the provider reports quota exhausted, mark it
-      // and move on. For Qoder, the next warmup tick will re-fetch
-      // /activity and /quota/usage and flip the account back to active
-      // automatically if Qoder reports remaining > 0 again. We accept the
-      // occasional false-exhaust (lifted within one warmup cycle) in
-      // exchange for never serving a known-bad account on retry.
+      // and move on; the next warmup tick re-checks and flips the account
+      // back to active if the provider reports remaining > 0 again. We
+      // accept the occasional false-exhaust (lifted within one warmup
+      // cycle) in exchange for never serving a known-bad account on retry.
       if (result.quotaExhausted) {
         await pool.markExhausted(account.id);
+        if (stickyKey) stickyStore.delete(stickyKey);
         lastError = result.error || "Quota exhausted";
         continue; // Try next account
       }
@@ -260,17 +285,19 @@ export async function routeRequest(
             : await provider.chatCompletion(account, compressedRequest);
 
           if (retryResult.success) {
-            await pool.markUsed(account.id);
+        void pool.markUsed(account.id);
+            pool.clearRateLimitCooldown(account.id);
+            if (stickyKey) stickyStore.set(stickyKey, account.id, providerName);
             // Scan retry response for ponytail: markers.
             const ponytailScan = scanPonytailMarkers(retryResult.response);
-            if (ponytailScan.markers.length > 0) {
+            if (compressionStats && ponytailScan.markers.length > 0) {
               compressionStats.ponytail = {
                 inputOverhead: compressionStats.byTechnique.ponytail ?? 0,
                 outputMarkers: ponytailScan.markers.length,
                 markerHits: ponytailScan.markers,
               };
               if (ponytailScan.strippedResponse) {
-                retryResult.response = ponytailScan.strippedResponse as any;
+                retryResult.response = ponytailScan.strippedResponse as ProviderResult["response"];
               }
             }
             return {
@@ -312,6 +339,7 @@ export async function routeRequest(
         await pool.markTransientFailure(account.id, errMsg);
       } else {
         await pool.markError(account.id, errMsg);
+        if (stickyKey) stickyStore.delete(stickyKey);
       }
       lastError = errMsg;
     }

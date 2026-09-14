@@ -24,10 +24,17 @@ export const config = {
   encryptionKey:
     process.env.ENCRYPTION_KEY || "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
   headless: process.env.HEADLESS !== "false", // default true
-  logBodyEnabled: process.env.POOLPROX_LOG_BODY_ENABLED !== "false",
-  logBodyFull: process.env.POOLPROX_LOG_BODY_FULL !== "false",
-  logBodyRedact: process.env.POOLPROX_LOG_BODY_REDACT === "true",
+  // Telemetry body storage. Bodies are persisted by default (redacted content)
+  // for request inspection; set POOLPROX_LOG_BODY_ENABLED=false to store only
+  // metadata + token counts (the explicitly documented storage mode).
+  logBodyEnabled: process.env.POOLPROX_LOG_BODY_ENABLED !== "false", // default true
+  logBodyFull: process.env.POOLPROX_LOG_BODY_FULL === "true", // default false (full bodies only on explicit opt-in)
+  logBodyRedact: process.env.POOLPROX_LOG_BODY_REDACT !== "false", // default true (set to disable redaction)
   logBodyMaxBytes: Number(process.env.POOLPROX_LOG_BODY_MAX_BYTES) || 65536,
+  // Bounded request protections (defaults: 10MB body, 256MB stream, no global cap).
+  maxBodyBytes: Number(process.env.POOLPROX_MAX_BODY_BYTES) || 10 * 1024 * 1024,
+  maxStreamBytes: Number(process.env.POOLPROX_MAX_STREAM_BYTES) || 256 * 1024 * 1024,
+  maxConcurrentRequests: Number(process.env.POOLPROX_MAX_CONCURRENT_REQUESTS) || 0, // 0 = unlimited (memory-adaptive caps in middleware)
   accountCacheTtlMs: Number(process.env.POOLPROX_ACCOUNT_CACHE_TTL_MS) || 3000,
   authProcessTimeoutMs: Number(process.env.POOLPROX_AUTH_PROCESS_TIMEOUT_MS) || 10 * 60 * 1000,
   providerRequestTimeoutMs: Number(process.env.POOLPROX_PROVIDER_REQUEST_TIMEOUT_MS) || 120_000,
@@ -36,8 +43,13 @@ providerQuotaTimeoutMs: Number(process.env.POOLPROX_PROVIDER_QUOTA_TIMEOUT_MS) |
   browserEngine: process.env.BROWSER_ENGINE || "camoufox",
   captchaService: process.env.CAPTCHA_SERVICE || "none",
   captchaApiKey: process.env.CAPTCHA_API_KEY || "",
-  // Providers: codebuddy, codebuddy-china, canva, codex, grok-cli, claude, byok
-  providers: ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok"] as const,
+  // Antigravity (Google Cloud Code Assist) OAuth credentials — read from env so
+  // they are never committed to source. No fallbacks: set ANTIGRAVITY_CLIENT_ID
+  // and ANTIGRAVITY_CLIENT_SECRET in `.env` (a public installed-app client).
+  antigravityClientId: process.env.ANTIGRAVITY_CLIENT_ID || "",
+  antigravityClientSecret: process.env.ANTIGRAVITY_CLIENT_SECRET || "",
+  // Providers: codebuddy, codebuddy-china, canva, codex, grok-cli, claude, byok, antigravity
+  providers: ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"] as const,
 } as const;
 
 export type Config = typeof config;

@@ -52,7 +52,7 @@ function anthropicContentToOpenAI(content: string | AnthropicContentBlock[] | un
 /**
  * Convert Anthropic tool definitions `{ name, description, input_schema }` into
  * the OpenAI shape `{ type: "function", function: { name, description, parameters } }`
- * that every internal provider (kiro, kiro-pro, qoder, ...) expects.
+ * that every internal provider expects.
  *
  * Without this, providers receive `input_schema` where they look for
  * `function.parameters`, silently send no usable tool spec upstream, and the

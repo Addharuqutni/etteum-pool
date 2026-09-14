@@ -11,8 +11,8 @@ import type { Account } from "../../db/schema";
 // Claude (Claude.ai / Claude Code OAuth) Provider
 //
 // Pools Claude Pro/Max subscription sessions via the Claude Code OAuth client.
-// Proxy-facing model ids use the `cc-` prefix so they never collide with kiro's
-// bare `claude-*` catalog. Upstream ids are the real Anthropic model names.
+// Proxy-facing model ids use the `cc-` prefix so they never collide with other
+// providers' bare `claude-*` catalogs. Upstream ids are the real Anthropic model names.
 //
 // Auth: Authorization: Bearer <oauth access_token>
 // Beta:  anthropic-beta: oauth-2025-04-20
@@ -498,10 +498,7 @@ export class ClaudeProvider extends BaseProvider {
         continue;
       }
 
-      messages.push({
-        role: msg.role === "tool" ? "user" : msg.role,
-        content: msg.content,
-      });
+      messages.push({ role: msg.role, content: msg.content });
     }
 
     const body: Record<string, unknown> = {

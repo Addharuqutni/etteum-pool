@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { createHash, randomBytes } from "crypto";
+// ponytail: Shared OAuth session storage across providers during auth flow
+const oauthSessions = new Map<string, { codeVerifier: string }>();
 import {
   completeClaudeOAuthLogin,
   completeCodebuddyOAuthLogin,
@@ -7,6 +9,7 @@ import {
   exchangeCodexAuthorizationCode,
   exchangeCodexRefreshTokens,
   importCodexAccessToken,
+  completeAntigravityOAuthLogin,
 } from "./accounts";
 import {
   consumeCodexOAuthSession,
@@ -36,9 +39,18 @@ import {
   getCodebuddyOAuthSession,
   updateCodebuddyOAuthSession,
 } from "./oauth-codebuddy-session";
+import {
+  consumeAntigravityOAuthSession,
+  createAntigravityOAuthSession,
+  deleteAntigravityOAuthSession,
+  getAntigravityOAuthSession,
+  updateAntigravityOAuthSession,
+} from "./oauth-antigravity-session";
 import { fetchGrokCliUser, GROK_CLI_OAUTH } from "../proxy/providers/grok-cli";
 import { buildClaudeAuthorizeUrl } from "../proxy/providers/claude";
 import { CODEBUDDY_OAUTH, pollCodebuddyToken, requestCodebuddyDeviceCode } from "../proxy/providers/codebuddy";
+import { ANTIGRAVITY_OAUTH } from "../proxy/providers/antigravity";
+import { config } from "../config";
 
 const CODEX_ISSUER = "https://auth.openai.com";
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -825,6 +837,212 @@ oauthRouter.post("/claude/cancel", async (c) => {
   return c.json({ success: true });
 });
 
+// ============================================================================
+// Antigravity OAuth - Exact Cartethyia/9router implementation with loopback server
+// ============================================================================
+
+oauthRouter.post("/antigravity/authorize", async (c) => {
+  try {
+    // 9router pattern: public installed-app OAuth client (no PKCE, no env setup).
+    const body = await c.req.json<{ redirectUri?: string }>().catch(() => ({}) as { redirectUri?: string });
+    const redirectUri =
+      body.redirectUri && /^https?:\/\/localhost:\d+\/oauth\/antigravity\/callback$/.test(body.redirectUri)
+        ? body.redirectUri
+        : `http://localhost:${config.dashboardPort}/oauth/antigravity/callback`;
+
+    const googleClientId = ANTIGRAVITY_OAUTH.clientId;
+    const googleClientSecret = ANTIGRAVITY_OAUTH.clientSecret;
+    
+    console.log(`[Antigravity] Authorize: client ${googleClientId.substring(0, 25)}... -> ${redirectUri}`);
+
+    // NO PKCE - simple authorization code flow (matches 9router antigravity).
+    // Create session WITHOUT code verifier; the session owns the state value.
+    const session = createAntigravityOAuthSession("", undefined);
+    
+    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    authUrl.searchParams.set("client_id", googleClientId);
+    authUrl.searchParams.set("redirect_uri", redirectUri);
+    authUrl.searchParams.set("response_type", "code");
+    authUrl.searchParams.set("scope", [
+      "https://www.googleapis.com/auth/cloud-platform",
+      "https://www.googleapis.com/auth/userinfo.email", 
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/cclog",
+      "https://www.googleapis.com/auth/experimentsandconfigs",
+    ].join(" "));
+    authUrl.searchParams.set("access_type", "offline");
+    authUrl.searchParams.set("prompt", "consent");
+    authUrl.searchParams.set("state", session.state);
+
+    // Store the real authUrl so /complete can recover the exact redirect_uri.
+    updateAntigravityOAuthSession(session.state, { authUrl: authUrl.toString() });
+
+    return c.json({
+      authUrl: authUrl.toString(),
+      state: session.state,
+      redirectUri,
+    });
+  } catch (error) {
+    console.error("[Antigravity OAuth] authorize error:", error);
+    return c.json(
+      { 
+        error: "Failed to initialize OAuth",
+        details: error instanceof Error ? error.message : String(error)
+      },
+      500
+    );
+  }
+});
+
+oauthRouter.get("/antigravity/status", async (c) => {
+  const state = c.req.query("state") || "";
+  const session = getAntigravityOAuthSession(state);
+  if (!session) {
+    return c.json({ error: "Invalid or expired session" }, 404);
+  }
+
+  if (session.status === "done" && session.connection) {
+    const consumed = consumeAntigravityOAuthSession(state);
+    return c.json({
+      status: consumed?.status,
+      connection: consumed?.connection,
+      error: consumed?.error,
+    });
+  }
+
+  return c.json({ status: session.status, authUrl: session.authUrl });
+});
+
+oauthRouter.post("/antigravity/cancel", async (c) => {
+  const body = await c.req.json<{ state?: string }>().catch(() => ({} as { state?: string }));
+  const state = body.state || c.req.query("state") || "";
+  if (state) {
+    updateAntigravityOAuthSession(state, { status: "cancelled", error: "Cancelled by user" });
+    deleteAntigravityOAuthSession(state);
+  }
+  return c.json({ success: true });
+});
+
+// ============================================================================
+// Backend OAuth Callback Handler - This receives Google's redirect after auth
+// ============================================================================
+
+oauthRouter.get("/antigravity/callback", async (c) => {
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  
+  if (!code || !state) {
+    console.error("[Antigravity OAuth] Callback missing code or state");
+    return c.html(`
+      <html>
+        <head><title>OAuth Error</title></head>
+        <body style="font-family:sans-serif;padding:50px;text-align:center;">
+          <h1 style="color:red;">❌ Authentication Failed</h1>
+          <p>Missing authorization code or state parameter.</p>
+          <a href="http://localhost:1931">Go to dashboard</a>
+        </body>
+      </html>
+    `, 400);
+  }
+
+  try {
+    // Update session status
+    updateAntigravityOAuthSession(state, { status: "exchanging" });
+    
+    const session = getAntigravityOAuthSession(state);
+    if (!session) {
+      throw new Error("OAuth session not found or expired");
+    }
+
+    // Exchange code for tokens & provision project (redirect_uri must match authorize).
+    const redirectUri = session.authUrl
+      ? new URL(session.authUrl).searchParams.get("redirect_uri") || `http://localhost:${config.dashboardPort}/oauth/antigravity/callback`
+      : `http://localhost:${config.dashboardPort}/oauth/antigravity/callback`;
+    const connection = await completeAntigravityOAuthLogin(code, redirectUri, state);
+    
+    updateAntigravityOAuthSession(state, {
+      status: "done",
+      connection,
+      error: undefined,
+    });
+
+    // Return HTML page with postMessage to opener window
+    return c.html(`
+      <html>
+        <head><title>Authentication Successful!</title></head>
+        <body style="font-family:sans-serif;text-align:center;padding:50px;background:#f5f5f5;">
+          <h1 style="color:#22c55e;font-size:3em;">✓</h1>
+          <h1>Authentication Successful!</h1>
+          <p>Email: ${connection.email || "Google User"}</p>
+          <p>Project ID: ${connection.projectId || "Provisioning..."}</p>
+        </body>
+        <script>
+          setTimeout(function() {
+            window.opener.postMessage({ 
+              type: "oauth_callback", 
+              data: { code: "${code}", state: "${state}", success: true } 
+            }, "*");
+            alert("Success! Click OK to close window.");
+            window.close();
+          }, 1000);
+        </script>
+      </html>
+    `);
+  } catch (err) {
+    console.error("[Antigravity OAuth Callback] Error:", err);
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    updateAntigravityOAuthSession(state, { status: "error", error: errorMsg });
+    return c.html(`<html><body><h1 style="color:red;">Error: ${errorMsg}</h1><a href="http://localhost:1931">Back to Dashboard</a></body></html>`, 400);
+  }
+});
+
+oauthRouter.post("/antigravity/complete", async (c) => {
+  const body = await c.req.json<{ code?: string; state?: string; callbackUrl?: string }>().catch(() => ({} as any));
+  const code = body.code || new URLSearchParams(c.req.url.split("?")[1]).get("code");
+  const state = body.state || new URLSearchParams(c.req.url.split("?")[1]).get("state");
+  const callbackUrl = body.callbackUrl;
+  const startMs = Date.now();
+
+  if (!code || !state) {
+    throw new Error("Missing code or state parameter");
+  }
+
+  try {
+    updateAntigravityOAuthSession(state, { status: "exchanging", error: undefined });
+
+    const session = getAntigravityOAuthSession(state);
+    if (!session) {
+      throw new Error("OAuth session not found or expired");
+    }
+
+    // Parse callback URL if provided
+    const redirectUri = callbackUrl ? callbackUrl : new URL(session.authUrl!).searchParams.get("redirect_uri")!;
+
+    const connection = await completeAntigravityOAuthLogin(code, redirectUri, state);
+    
+    updateAntigravityOAuthSession(state, {
+      status: "done",
+      connection,
+      error: undefined,
+    });
+
+    const consumed = consumeAntigravityOAuthSession(state);
+    return c.json({
+      success: true,
+      connection: consumed?.connection,
+    });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`[Antigravity OAuth] /complete failed (${Date.now() - startMs}ms):`, errorMessage);
+    updateAntigravityOAuthSession(state, { 
+      status: "error", 
+      error: errorMessage 
+    });
+    return c.json({ success: false, error: errorMessage }, 400);
+  }
+});
+
+// Catch-all routes for unsupported providers/actions (MUST BE LAST)
 oauthRouter.post("/:provider/poll", (c) => {
   return c.json({ error: "Unsupported provider/action" }, 400);
 });
@@ -834,3 +1052,4 @@ oauthRouter.all("/:provider/:action", (c) => {
 });
 
 export default oauthRouter;
+

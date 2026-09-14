@@ -128,11 +128,12 @@ function toNumberSettings(settingsMap: Record<string, string>): {
 
 async function sendWebhook(url: string, text: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch(url, {
+    const { safeFetch } = await import("../utils/ssrf");
+    const res = await safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildAlertPayload(text)),
-    });
+    }, { timeoutMs: 10_000 });
     if (!res.ok) {
       return { ok: false, error: `webhook responded ${res.status}` };
     }

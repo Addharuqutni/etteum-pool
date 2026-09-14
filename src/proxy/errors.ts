@@ -63,6 +63,11 @@ export function getSseError(payload: string): string | null {
   } catch {
     return null; // not JSON — not a detectable error event
   }
+  return getSseErrorFromParsed(parsed);
+}
+
+/** Same detection as getSseError but on an already-parsed SSE payload. */
+export function getSseErrorFromParsed(parsed: any): string | null {
   if (parsed.type === "upstream_error") {
     return typeof parsed.error === "string" ? parsed.error : "upstream_error";
   }

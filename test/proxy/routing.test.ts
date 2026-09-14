@@ -32,8 +32,7 @@ describe("getProviderForModel", () => {
     ["cbc-claude-opus-4.6", "codebuddy-china"],
     // claude (assistant OAuth)
     ["cc-sonnet-4.6", "claude"],
-    // byok
-    ["byok-gpt-5", "byok"],
+    // byok (dynamic prefixes — covered by byok-provider.test.ts with seeded accounts)
   ];
 
   for (const [model, expected] of cases) {

@@ -79,13 +79,13 @@ interface ProviderResult {
 
 /**
  * Final result event from login.py
- * Format: {"type":"result","kiro":{...},"codebuddy":{...},"canva":{...}}
+ * Format: {"type":"result","codebuddy":{...},"canva":{...},"codex":{...}}
  */
 interface ScriptResultEvent {
   type: "result";
-  kiro: ProviderResult;
   codebuddy: ProviderResult;
   canva: ProviderResult;
+  codex: ProviderResult;
   [key: string]: unknown;
 }
 
@@ -191,12 +191,21 @@ async function readTextStream(
   let buffer = "";
   let full = "";
 
+  // Keep only the tail of accumulated output: callers use it only as a
+  // fallback for parsing result events / error messages when line streaming
+  // produced nothing. Full output is unbounded for chatty Python scripts.
+  const MAX_ACCUMULATED = 64 * 1024;
+  const appendCapped = (text: string) => {
+    full += text;
+    if (full.length > MAX_ACCUMULATED) full = full.slice(-MAX_ACCUMULATED);
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
     const chunk = decoder.decode(value, { stream: true });
-    full += chunk;
+    appendCapped(chunk);
     buffer += chunk;
 
     const lines = buffer.split("\n");
@@ -206,7 +215,7 @@ async function readTextStream(
 
   const rest = decoder.decode();
   if (rest) {
-    full += rest;
+    appendCapped(rest);
     buffer += rest;
   }
   if (buffer.trim()) onLine?.(buffer);
@@ -297,44 +306,6 @@ function extractResult(events: ScriptEvent[]): ScriptResultEvent | null {
   return null;
 }
 
-async function getKiroProUpgradeEnv(accountId: number): Promise<Record<string, string>> {
-  // Check env var first, then fall back to DB settings
-  let upgradeEnabled = config.kiroProUpgrade;
-  let billingAddress = config.billingAddress;
-
-  if (!upgradeEnabled) {
-    const [upgradeSetting] = await db.select().from(settings).where(eq(settings.key, "kiro_pro_upgrade"));
-    if (upgradeSetting?.value === "true") upgradeEnabled = true;
-  }
-
-  if (!upgradeEnabled) return {};
-
-  // Read billing address from DB settings if not set via env
-  if (!process.env.BILLING_ADDRESS) {
-    const keys = ["billing_name", "billing_country", "billing_line1", "billing_city", "billing_state", "billing_postal_code"];
-    const rows = await db.select().from(settings);
-    const map: Record<string, string> = {};
-    for (const r of rows) if (keys.includes(r.key) && r.value) map[r.key] = r.value;
-
-    if (Object.keys(map).length > 0) {
-      billingAddress = {
-        name: map.billing_name || billingAddress.name,
-        country: map.billing_country || billingAddress.country,
-        line1: map.billing_line1 || billingAddress.line1,
-        city: map.billing_city || billingAddress.city,
-        state: map.billing_state || billingAddress.state,
-        postal_code: map.billing_postal_code || billingAddress.postal_code,
-      };
-    }
-  }
-
-  // Pass full shuffled pool — each process gets a random order to minimize collision
-  return {
-    BATCHER_KIRO_PRO_UPGRADE: "true",
-    BATCHER_VCC_POOL: JSON.stringify(await getVccPoolFromDb()),
-    BATCHER_BILLING_ADDRESS: JSON.stringify(billingAddress),
-  };
-}
 
 /**
  * Run the Python login script for a SINGLE provider.
@@ -344,7 +315,7 @@ async function getKiroProUpgradeEnv(accountId: number): Promise<Record<string, s
  *   --email <email> --password <password>
  *
  * And uses env vars:
- *   ENOWX_ALLOWED_PROVIDERS=kiro,codebuddy,canva (comma-separated)
+ *   ENOWX_ALLOWED_PROVIDERS=codebuddy,canva,codex (comma-separated)
  *   BATCHER_ENABLE_CAMOUFOX=true (for browser automation)
  *   BATCHER_CAMOUFOX_HEADLESS=true
  *   BATCHER_PROXY_URL=<proxy>
@@ -352,7 +323,7 @@ async function getKiroProUpgradeEnv(accountId: number): Promise<Record<string, s
  */
 export async function loginAccount(account: Account, options: LoginOptions = {}): Promise<LoginResult> {
   const password = decrypt(account.password);
-  const provider = account.provider; // kiro | codebuddy | canva
+  const provider = account.provider; // codebuddy | codebuddy-china | canva | codex | grok-cli | claude | byok | antigravity
   const headless = options.headless ?? config.headless;
   const streamedEvents: ScriptEvent[] = [];
 
@@ -377,9 +348,11 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
       },
     });
 
-    const kiroProEnv = provider === "kiro-pro"
-      ? { BATCHER_BROWSER_ENGINE: options.browserEngine || config.browserEngine, ...(await getKiroProUpgradeEnv(account.id)) }
-      : {};
+    const extraEnv: Record<string, string> =
+      provider === "codebuddy" || provider === "canva" || provider === "codex"
+        ? { BATCHER_BROWSER_ENGINE: options.browserEngine || config.browserEngine }
+        : {};
+
 
     const proxyUrlForAuth = (await getNextProxy("auth"))?.url || "";
 
@@ -409,7 +382,7 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
           HTTPS_PROXY: proxyUrlForAuth || config.proxyUrl || "",
           BATCHER_CONCURRENT: "1",
           BATCHER_PRIORITY: provider,
-          ...kiroProEnv,
+          ...extraEnv,
         },
         cwd: config.authScriptCwd,
       }
@@ -448,10 +421,7 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
       }
     });
     const stderrPromise = new Response(proc.stderr).text();
-    const timeoutMs = (provider === "kiro-pro" && config.kiroProUpgrade)
-      ? Math.max(config.authProcessTimeoutMs, 15 * 60 * 1000)
-      : config.authProcessTimeoutMs;
-    const exitCode = await waitForProcessExit(proc, timeoutMs, account.id);
+    const exitCode = await waitForProcessExit(proc, config.authProcessTimeoutMs, account.id);
     const [stdoutResult, stderrResult] = await Promise.allSettled([stdoutPromise, stderrPromise]);
     const stdout = stdoutResult.status === "fulfilled" ? stdoutResult.value : "";
     const stderr = stderrResult.status === "fulfilled" ? stderrResult.value : String(stderrResult.reason || "");
@@ -534,144 +504,6 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
     // Success! Store credentials and quota
     const credentials = providerResult.credentials || {};
     const quota = providerResult.quota || {};
-
-    // GitLab Duo: the bot returned a freshly-generated PAT. Hand it off to the
-    // canonical account-creation pipeline (`createGitlabDuoAccount`) which
-    // validates the PAT, resolves the namespace, fetches available models and
-    // updates this row in-place. We do this here — instead of in the standard
-    // path below — because the PAT must be re-encrypted as `password`, the
-    // tokens column needs the gitlab-specific shape {gitlabBaseUrl, namespaceId,
-    // namespacePath, userId}, and the metadata must contain the model list.
-    if (provider === "gitlab-duo") {
-      const pat = (credentials as Record<string, string>).pat || "";
-      const baseUrl = (credentials as Record<string, string>).gitlab_base_url || "https://gitlab.com";
-      const gmailEmail = (credentials as Record<string, string>).gmail_email || account.email;
-      const gmailPassword = (credentials as Record<string, string>).gmail_password || password;
-
-      if (!pat) {
-        const errorMsg = "Bot finished but did not return a PAT";
-        await markAccountError(account.id, errorMsg);
-        const log = addAuthLog({
-          type: "login_failed",
-          accountId: account.id,
-          email: account.email,
-          provider,
-          error: errorMsg,
-          message: errorMsg,
-        });
-        broadcast({
-          type: "login_failed",
-          data: { logId: log.id, id: account.id, email: account.email, provider, error: errorMsg },
-        });
-        return { success: false, error: errorMsg };
-      }
-
-      const { createGitlabDuoAccount } = await import("../api/accounts");
-      const finalize = await createGitlabDuoAccount({
-        gitlabBaseUrl: baseUrl,
-        pat,
-        // Keep the gmail address as the row label so users can recognize the
-        // account in the dashboard. createGitlabDuoAccount will preserve it
-        // when `existingAccountId` is provided.
-        label: account.email,
-        existingAccountId: account.id,
-        gmailEmail,
-        gmailPassword,
-      });
-
-      if (!finalize.ok) {
-        const errorMsg = `PAT validation failed: ${finalize.error}`;
-        await markAccountError(account.id, errorMsg);
-        const log = addAuthLog({
-          type: "login_failed",
-          accountId: account.id,
-          email: account.email,
-          provider,
-          error: errorMsg,
-          message: errorMsg,
-        });
-        broadcast({
-          type: "login_failed",
-          data: { logId: log.id, id: account.id, email: account.email, provider, error: errorMsg },
-        });
-        return { success: false, error: errorMsg };
-      }
-
-      const successLog = addAuthLog({
-        type: "login_success",
-        accountId: account.id,
-        email: account.email,
-        provider,
-        step: "success",
-        message: `GitLab Duo onboarded: ${finalize.username} (${finalize.modelsCount} models, default=${finalize.defaultModel})`,
-        data: {
-          username: finalize.username,
-          namespacePath: finalize.namespacePath,
-          modelsCount: finalize.modelsCount,
-          defaultModel: finalize.defaultModel,
-        },
-      });
-      broadcast({
-        type: "login_success",
-        data: {
-          logId: successLog.id,
-          id: account.id,
-          email: account.email,
-          provider,
-          modelsCount: finalize.modelsCount,
-          defaultModel: finalize.defaultModel,
-        },
-      });
-
-      return { success: true, tokens: credentials, quota };
-    }
-
-    // Kiro Pro: upgrade must succeed before marking active
-    if (provider === "kiro-pro" && config.kiroProUpgrade) {
-      const upgradeResult = (providerResult as any).upgrade as
-        | { upgrade_success: boolean; upgrade_error?: string; card_last4?: string; quota?: Record<string, unknown> }
-        | null
-        | undefined;
-
-      if (!upgradeResult || !upgradeResult.upgrade_success) {
-        const upgradeError = upgradeResult?.upgrade_error || "upgrade_not_attempted";
-        await db
-          .update(accounts)
-          .set({
-            status: "error",
-            tokens: credentials as unknown,
-            errorMessage: `Login OK but upgrade failed: ${upgradeError}`,
-            lastLoginAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(accounts.id, account.id));
-
-        if (upgradeResult?.card_last4) {
-          const cardStatus = upgradeError.includes("declined") ? "declined" as const : "error" as const;
-          await handleCardResult(account.id, upgradeResult.card_last4, cardStatus);
-        }
-
-        const log = addAuthLog({
-          type: "login_failed",
-          accountId: account.id,
-          email: account.email,
-          provider,
-          error: `Upgrade failed: ${upgradeError}`,
-          message: `Upgrade failed: ${upgradeError}`,
-        });
-        broadcast({
-          type: "login_failed",
-          data: { logId: log.id, id: account.id, email: account.email, provider, error: `Upgrade failed: ${upgradeError}` },
-        });
-        return { success: false, error: `Upgrade failed: ${upgradeError}`, noRetry: true };
-      }
-
-      // Upgrade succeeded — update card status
-      if (upgradeResult.card_last4) {
-        await handleCardResult(account.id, upgradeResult.card_last4, "success");
-      }
-    }
-
     let { limit: quotaLimit, remaining: quotaRemaining } = parseQuota(quota);
     let quotaMetadata: Record<string, unknown> = quota;
 
@@ -791,15 +623,6 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
       data: { logId: log.id, id: account.id, email: account.email, provider, error: errorMsg },
     });
 
-    // For kiro-pro: if we already passed login phase (upgrade/payment steps), don't retry
-    const isKiroProUpgrade = provider === "kiro-pro" && config.kiroProUpgrade;
-    const reachedUpgradeStep = streamedEvents.some((e) =>
-      e.type === "progress" && /upgrade|payment|billing|card|stripe|checkout/i.test((e as any).step || (e as any).message || "")
-    );
-    if (isKiroProUpgrade && reachedUpgradeStep) {
-      return { success: false, error: errorMsg, noRetry: true };
-    }
-
     return { success: false, error: errorMsg };
   } finally {
     activeProcesses.delete(account.id);
@@ -809,7 +632,7 @@ export async function loginAccount(account: Account, options: LoginOptions = {})
 /**
  * Run login for ALL providers at once for a given email/password.
  * This is more efficient when adding a new account that should be
- * registered across all providers (Kiro, CodeBuddy, Canva).
+ * registered across all providers (CodeBuddy, Canva, Codex).
  */
 export async function loginAllProviders(
   email: string,
@@ -832,7 +655,7 @@ export async function loginAllProviders(
         stderr: "pipe",
         env: {
           ...process.env,
-          ENOWX_ALLOWED_PROVIDERS: "kiro,kiro-pro,codebuddy,canva,codex",
+          ENOWX_ALLOWED_PROVIDERS: "codebuddy,canva,codex",
           BATCHER_ENABLE_CAMOUFOX: "true",
           BATCHER_CAMOUFOX_HEADLESS: config.headless ? "true" : "false",
           BATCHER_PROXY_URL: proxyUrlForAuth || config.proxyUrl || "",
@@ -857,8 +680,6 @@ export async function loginAllProviders(
     if (!result) {
       const error = stderr.trim() || `No result${exitCode !== 0 ? ` (exit ${exitCode})` : ""}`;
       return {
-        kiro: { success: false, error },
-        "kiro-pro": { success: false, error },
         codebuddy: { success: false, error },
         canva: { success: false, error },
         codex: { success: false, error },
@@ -867,7 +688,7 @@ export async function loginAllProviders(
 
     const output: Record<string, LoginResult> = {};
 
-    for (const provider of ["kiro", "kiro-pro", "codebuddy", "canva", "codex"] as const) {
+    for (const provider of ["codebuddy", "canva", "codex"] as const) {
       const pr = result[provider] as ProviderResult | undefined;
       if (!pr || !pr.success) {
         output[provider] = {
@@ -887,8 +708,6 @@ export async function loginAllProviders(
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     return {
-      kiro: { success: false, error: errorMsg },
-      "kiro-pro": { success: false, error: errorMsg },
       codebuddy: { success: false, error: errorMsg },
       canva: { success: false, error: errorMsg },
       codex: { success: false, error: errorMsg },

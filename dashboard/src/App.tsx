@@ -21,6 +21,9 @@ const ImageStudio = lazy(() => import("./pages/ImageStudio"));
 const FilterRules = lazy(() => import("./pages/FilterRules"));
 const Integration = lazy(() => import("./pages/Integration"));
 const CodexOAuthCallback = lazy(() => import("./pages/CodexOAuthCallback"));
+const AntigravityOAuthCallback = lazy(() => import("./pages/AntigravityOAuthCallback"));
+const Share = lazy(() => import("./pages/Share"));
+const Pool = lazy(() => import("./pages/Pool"));
 
 function RouteFallback() {
   return <div className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
@@ -60,32 +63,37 @@ export default function App() {
     return <div className="flex h-screen items-center justify-center font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
   }
 
-  if (!authed) {
-    return <Login onLogin={handleLogin} />;
-  }
-
   return (
     <Suspense fallback={<RouteFallback />}>
       <Routes>
-        <Route element={<Layout onLogout={handleLogout} />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/accounts" element={<Accounts />} />
-          <Route path="/accounts/byok/:prefix" element={<ByokAccountList />} />
-          <Route path="/accounts/:provider" element={<AccountList />} />
-          <Route path="/models" element={<Models />} />
-          <Route path="/combos" element={<Combos />} />
-          <Route path="/api-key" element={<ApiKey />} />
-          <Route path="/requests" element={<Requests />} />
-          <Route path="/bot-logs" element={<BotLogs />} />
-          <Route path="/usage" element={<Usage />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/vcc-pool" element={<VccPool />} />
-          <Route path="/proxy-pool" element={<ProxyPool />} />
-          <Route path="/filter-rules" element={<FilterRules />} />
-          <Route path="/integration" element={<Integration />} />
-          <Route path="/image-studio" element={<ImageStudio />} />
-          <Route path="/oauth/codex/callback" element={<CodexOAuthCallback />} />
-        </Route>
+        {/* Public share page — no login, no layout */}
+        <Route path="/s/:slug" element={<Share />} />
+        {/* Public pool landing — no login, no layout */}
+        <Route path="/pool" element={<Pool />} />
+        {!authed ? (
+          <Route path="*" element={<Login onLogin={handleLogin} />} />
+        ) : (
+          <Route element={<Layout onLogout={handleLogout} />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/accounts" element={<Accounts />} />
+            <Route path="/accounts/byok/:prefix" element={<ByokAccountList />} />
+            <Route path="/accounts/:provider" element={<AccountList />} />
+            <Route path="/models" element={<Models />} />
+            <Route path="/combos" element={<Combos />} />
+            <Route path="/api-key" element={<ApiKey />} />
+            <Route path="/requests" element={<Requests />} />
+            <Route path="/bot-logs" element={<BotLogs />} />
+            <Route path="/usage" element={<Usage />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/vcc-pool" element={<VccPool />} />
+            <Route path="/proxy-pool" element={<ProxyPool />} />
+            <Route path="/filter-rules" element={<FilterRules />} />
+            <Route path="/integration" element={<Integration />} />
+            <Route path="/image-studio" element={<ImageStudio />} />
+            <Route path="/oauth/codex/callback" element={<CodexOAuthCallback />} />
+            <Route path="/oauth/antigravity/callback" element={<AntigravityOAuthCallback />} />
+          </Route>
+        )}
       </Routes>
     </Suspense>
   );

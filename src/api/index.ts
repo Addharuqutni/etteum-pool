@@ -12,6 +12,7 @@ import { integrationRouter } from "./integration";
 import { oauthRouter } from "./oauth";
 import { alertsRouter } from "./alerts";
 import { combosRouter } from "./combos";
+import { publicRouter } from "./public";
 
 export const apiRouter = new Hono();
 
@@ -28,9 +29,10 @@ apiRouter.route("/integration", integrationRouter);
 apiRouter.route("/combos", combosRouter);
 apiRouter.route("/oauth", oauthRouter);
 apiRouter.route("/alerts", alertsRouter);
+apiRouter.route("/public", publicRouter);
 
 apiRouter.get("/providers", (c) => {
-  return c.json({ data: ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok"] });
+  return c.json({ data: ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"] });
 });
 
 // Health check

@@ -1,7 +1,7 @@
 {
   "name": "etteum-pool",
   "version": "1.0.0",
-  "description": "AI Proxy Pool for Multiple Providers (Kiro, CodeBuddy, Codex, Canva, Qoder, GitLab Duo, YouMind) — PRIVATE",
+  "description": "AI proxy pool for CodeBuddy, CodeBuddy-China, Canva, Codex, Grok-CLI, Claude, BYOK, and Antigravity — PRIVATE",
   "type": "module",
   "scripts": {
     "start": "bun scripts/production.ts",
@@ -15,7 +15,6 @@
     "preflight": "bun scripts/preflight.ts"
   },
   "dependencies": {
-    "cbor-x": "^1.6.4",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.17",
     "playwright": "^1.40.0"

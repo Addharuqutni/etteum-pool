@@ -4,16 +4,18 @@ import { accounts, requestLogs, vccCards, vccTransactions, settings } from "../d
 import { eq, inArray } from "drizzle-orm";
 import { encrypt, decrypt } from "../utils/crypto";
 import { broadcast } from "../ws/index";
-import type { NewAccount } from "../db/schema";
+import type { Account, NewAccount } from "../db/schema";
 import { loginQueue } from "../auth/queue";
 import { warmupQueue } from "../auth/warmup-queue";
 import { warmupAccount } from "../auth/warmup-runner";
 import { pool, type ProviderName } from "../proxy/pool";
+import type { Provider } from "../config";
 import {
   exchangeClaudeAuthorizationCode,
   fetchClaudeProfile,
   type ClaudeTokens,
 } from "../proxy/providers/claude";
+import { ANTIGRAVITY_OAUTH, discoverOrProvisionProject } from "../proxy/providers/antigravity";
 
 export const accountsRouter = new Hono();
 
@@ -407,11 +409,11 @@ accountsRouter.post("/byok/fetch-models", async (c) => {
 
   let res: Response;
   try {
-    res = await fetch(`${baseUrl}/models`, {
+    const { safeFetch } = await import("../utils/ssrf");
+    res = await safeFetch(`${baseUrl}/models`, {
       method: "GET",
       headers: { Accept: "application/json", ...upstreamHeaders },
-      signal: AbortSignal.timeout(15000),
-    });
+    }, { timeoutMs: 15000 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.warn(`[API accounts] fetch-models failed for ${baseUrl}:`, error);
@@ -781,11 +783,12 @@ accountsRouter.post("/byok/:id/test", async (c) => {
 
   try {
     const startTime = Date.now();
-    const response = await fetch(url, {
+    const { safeFetch } = await import("../utils/ssrf");
+    const response = await safeFetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-    });
+    }, { timeoutMs: 20_000 });
     const latencyMs = Date.now() - startTime;
 
     if (response.status === 401 || response.status === 403) {
@@ -823,527 +826,6 @@ accountsRouter.post("/byok/:id/test", async (c) => {
     });
   }
 });
-/*  */
-/**
- * ============================================================================
- * GitLab Duo Management Endpoints
- * NOTE: Must be defined BEFORE /:id routes to avoid route collision.
- * ============================================================================
- */
-
-/**
- * Create a GitLab Duo account from a PAT — pure function, callable from both
- * the HTTP route AND the bot runner (after Camoufox finishes the OAuth flow
- * and obtains a fresh PAT). Performs PAT validation → namespace resolve →
- * models lookup → row insert (or update of an existing pending row).
- *
- * Pass `existingAccountId` when called from the bot path to UPDATE the
- * pending row created at queue time (preserves email + log history) instead
- * of inserting a duplicate.
- */
-export type CreateGitlabDuoInput = {
-  gitlabBaseUrl?: string;
-  pat: string;
-  label?: string;
-  existingAccountId?: number;
-  /**
-   * When set, the bot's original Gmail credentials are persisted alongside
-   * the PAT so future flows (re-login, trial extend) can re-use them.
-   */
-  gmailEmail?: string;
-  gmailPassword?: string;
-};
-
-export type CreateGitlabDuoOk = {
-  ok: true;
-  id: number;
-  label: string;
-  username: string;
-  namespacePath: string;
-  defaultModel: string;
-  modelsCount: number;
-};
-
-export type CreateGitlabDuoErr = {
-  ok: false;
-  status: number;
-  error: string;
-};
-
-export async function createGitlabDuoAccount(
-  input: CreateGitlabDuoInput
-): Promise<CreateGitlabDuoOk | CreateGitlabDuoErr> {
-  const baseUrl = (input.gitlabBaseUrl || "https://gitlab.com").replace(/\/$/, "");
-  const pat = input.pat?.trim();
-  if (!pat) return { ok: false, status: 400, error: "pat is required" };
-
-  // PAT auth — match the official duo-cli (which uses `Private-Token` for
-  // PAT and reserves `Authorization: Bearer …` for OAuth tokens).
-  const headers = {
-    "Private-Token": pat,
-    "Content-Type": "application/json",
-    "User-Agent": "etteum-pool/gitlab-duo",
-    "X-Gitlab-Client-Name": "Duo CLI",
-    "X-Gitlab-Client-Version": "8.104.0",
-  };
-
-  // 1. Validate PAT — must have `api` scope and not be revoked.
-  try {
-    const r = await fetch(`${baseUrl}/api/v4/personal_access_tokens/self`, { headers });
-    if (!r.ok) return { ok: false, status: 400, error: `PAT invalid (HTTP ${r.status})` };
-    const j = (await r.json()) as { scopes?: string[]; revoked?: boolean };
-    if (j.revoked) return { ok: false, status: 400, error: "PAT is revoked" };
-    if (!Array.isArray(j.scopes) || !j.scopes.includes("api")) {
-      return { ok: false, status: 400, error: "PAT must have `api` scope" };
-    }
-  } catch (e) {
-    return { ok: false, status: 502, error: `Cannot reach GitLab: ${e instanceof Error ? e.message : String(e)}` };
-  }
-
-  // 2. Resolve user + duo-default namespace via GraphQL.
-  let username = "";
-  let userId = 0;
-  let namespacePath = "";
-  let namespaceId = 0;
-  try {
-    const gqlBody = {
-      operationName: "getUser",
-      query: `query getUser {
-        currentUser {
-          id
-          username
-          userPreferences { duoDefaultNamespace { id fullPath } }
-          groups(first: 1, permissionScope: CREATE_PROJECTS) {
-            nodes { id fullPath }
-          }
-        }
-      }`,
-      variables: {},
-    };
-    const r = await fetch(`${baseUrl}/api/graphql`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(gqlBody),
-    });
-    const json = (await r.json()) as any;
-    if (json.errors) return { ok: false, status: 400, error: `GraphQL: ${JSON.stringify(json.errors)}` };
-    const cu = json.data?.currentUser;
-    if (!cu) return { ok: false, status: 400, error: "currentUser is null — PAT lacks read_user scope?" };
-
-    const duoNs = cu.userPreferences?.duoDefaultNamespace;
-    const fallbackNs = cu.groups?.nodes?.[0];
-    const ns = duoNs ?? fallbackNs;
-    if (!ns) {
-      return {
-        ok: false,
-        status: 400,
-        error: "Cannot resolve a namespace for this PAT. Either set a default namespace in GitLab → Preferences → Duo, or grant the user access to at least one group.",
-      };
-    }
-    username = cu.username;
-    userId = Number(String(cu.id).split("/").pop());
-    namespacePath = ns.fullPath;
-    namespaceId = Number(String(ns.id).split("/").pop());
-  } catch (e) {
-    return { ok: false, status: 502, error: `GraphQL fetch failed: ${e instanceof Error ? e.message : String(e)}` };
-  }
-
-  // 3. List available models for that namespace.
-  let defaultModel = "claude_sonnet_4_6_vertex";
-  let availableModels: Array<{ name: string; ref: string }> = [];
-  let gitlabVersion = "";
-  try {
-    const gqlBody = {
-      operationName: "lsp_aiChatAvailableModels",
-      query: `query lsp_aiChatAvailableModels($rootNamespaceId: GroupID!) {
-        metadata { version }
-        aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
-          defaultModel { name ref }
-          selectableModels { name ref }
-        }
-      }`,
-      variables: { rootNamespaceId: `gid://gitlab/Group/${namespaceId}` },
-    };
-    const r = await fetch(`${baseUrl}/api/graphql`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(gqlBody),
-    });
-    const json = (await r.json()) as any;
-    gitlabVersion = json.data?.metadata?.version ?? "";
-    const dm = json.data?.aiChatAvailableModels?.defaultModel;
-    const sm = json.data?.aiChatAvailableModels?.selectableModels;
-    if (dm?.ref) defaultModel = dm.ref;
-    if (Array.isArray(sm)) availableModels = sm;
-  } catch (err) {
-    // Non-fatal — fall back to bundled defaults.
-    console.warn("[GitLab Duo] Failed to fetch available models:", err);
-  }
-
-  const label = input.label?.trim() || username;
-  const tokens = {
-    gitlabBaseUrl: baseUrl,
-    namespaceId,
-    namespacePath,
-    userId,
-    ...(input.gmailEmail ? { gmailEmail: input.gmailEmail } : {}),
-  };
-  const metadata: Record<string, unknown> = {
-    defaultModel,
-    availableModels,
-    gitlabVersion,
-  };
-  if (input.gmailPassword) {
-    // Encrypt the Gmail password again under metadata so it survives PAT
-    // rotation without leaking outside `password` (which holds the PAT).
-    metadata.gmailPasswordEncrypted = encrypt(input.gmailPassword);
-  }
-
-  // 3.5. Pull live GitLab Credits (trial wallet) — every trial seat gets
-  // ~24 credits over the 30-day window. We hit `trialUsage.usersUsage.users`
-  // and pick the row matching our user's gid; falls back to the first node.
-  let quotaLimit = 0;
-  let quotaRemaining = 0;
-  let quotaResetAt: Date | null = null;
-  try {
-    const r = await fetch(`${baseUrl}/api/graphql`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        operationName: "getTrialUsage",
-        query: `query getTrialUsage($namespacePath: ID) {
-          trialUsage(namespacePath: $namespacePath) {
-            activeTrial { startDate endDate }
-            usersUsage {
-              users(first: 50) {
-                nodes { id username usage { creditsUsed totalCredits } }
-              }
-            }
-          }
-        }`,
-        variables: { namespacePath },
-      }),
-    });
-    if (r.ok) {
-      const j = (await r.json()) as any;
-      const trial = j?.data?.trialUsage;
-      const nodes: Array<{ id?: string; username?: string; usage?: { creditsUsed?: number; totalCredits?: number } }> =
-        trial?.usersUsage?.users?.nodes ?? [];
-      const ourGid = userId ? `gid://gitlab/User/${userId}` : null;
-      const me =
-        nodes.find((n) => ourGid && n.id === ourGid) ??
-        nodes.find((n) => n.username && username && n.username.toLowerCase() === username.toLowerCase()) ??
-        nodes[0];
-      const used = me?.usage?.creditsUsed;
-      const total = me?.usage?.totalCredits;
-      if (typeof used === "number" && typeof total === "number") {
-        quotaLimit = total;
-        quotaRemaining = Math.max(0, total - used);
-      }
-      const endDate = trial?.activeTrial?.endDate ? new Date(trial.activeTrial.endDate) : null;
-      if (endDate && !isNaN(endDate.getTime())) quotaResetAt = endDate;
-    }
-  } catch (err) {
-    // Non-fatal: leave quota at 0/0; the periodic warmup will fill it later.
-    console.warn("[GitLab Duo] Failed to fetch quota:", err);
-  }
-
-  // 4. Insert OR update existing pending row (bot path).
-  try {
-    if (input.existingAccountId) {
-      // Update path — bot already inserted a pending row at queue time. Same
-      // (provider, email) unique constraint already passed; just complete the
-      // row with real PAT/tokens/metadata.
-      const updated = await db.update(accounts)
-        .set({
-          password: encrypt(pat),
-          status: "active",
-          enabled: true,
-          tokens,
-          metadata,
-          quotaLimit,
-          quotaRemaining,
-          quotaResetAt,
-          errorMessage: null,
-          lastLoginAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(accounts.id, input.existingAccountId))
-        .returning();
-      const row = updated[0];
-      if (!row) return { ok: false, status: 404, error: "Pending account row not found" };
-      pool.invalidate("gitlab-duo" as ProviderName);
-      const { refreshGitlabDuoModels } = await import("../proxy/providers/registry");
-      await refreshGitlabDuoModels();
-      broadcast({
-        type: "account_updated",
-        data: { id: row.id, provider: "gitlab-duo", email: row.email, status: "active" },
-      });
-      return {
-        ok: true,
-        id: row.id,
-        label: row.email,
-        username,
-        namespacePath,
-        defaultModel,
-        modelsCount: availableModels.length,
-      };
-    }
-
-    // Standard insert path (manual PAT add via dashboard).
-    const existing = await db.select().from(accounts)
-      .where(eq(accounts.email, label))
-      .then((rows) => rows.find((r) => r.provider === "gitlab-duo"));
-    if (existing) {
-      return { ok: false, status: 409, error: "GitLab Duo account with this label already exists" };
-    }
-
-    const result = await db.insert(accounts).values({
-      provider: "gitlab-duo",
-      email: label,
-      password: encrypt(pat),
-      status: "active",
-      enabled: true,
-      tokens,
-      metadata,
-      quotaLimit,
-      quotaRemaining,
-      quotaResetAt,
-    } as NewAccount).returning();
-    const created = result[0]!;
-    pool.invalidate("gitlab-duo" as ProviderName);
-
-    const { refreshGitlabDuoModels } = await import("../proxy/providers/registry");
-    await refreshGitlabDuoModels();
-
-    broadcast({
-      type: "account_created",
-      data: { id: created.id, provider: "gitlab-duo", email: label },
-    });
-
-    return {
-      ok: true,
-      id: created.id,
-      label,
-      username,
-      namespacePath,
-      defaultModel,
-      modelsCount: availableModels.length,
-    };
-  } catch (e) {
-    return { ok: false, status: 500, error: e instanceof Error ? e.message : "Unknown error" };
-  }
-}
-
-/**
- * POST /api/accounts/gitlab-duo - Create a GitLab Duo account from a PAT.
- *
- * Body: { gitlab_base_url?: string, pat: string, label?: string }
- *
- * Thin wrapper over `createGitlabDuoAccount()`.
- */
-accountsRouter.post("/gitlab-duo", async (c) => {
-  const body = await c.req.json<{
-    gitlab_base_url?: string;
-    gitlabBaseUrl?: string;
-    pat: string;
-    label?: string;
-    gmail_email?: string;
-    gmailEmail?: string;
-    gmail_password?: string;
-    gmailPassword?: string;
-  }>();
-  try {
-    const result = await createGitlabDuoAccount({
-      gitlabBaseUrl: body.gitlab_base_url ?? body.gitlabBaseUrl,
-      pat: body.pat,
-      label: body.label,
-      gmailEmail: body.gmail_email ?? body.gmailEmail,
-      gmailPassword: body.gmail_password ?? body.gmailPassword,
-    });
-    if (!result.ok) return c.json({ error: result.error }, result.status as any);
-    return c.json({
-      success: true,
-      id: result.id,
-      label: result.label,
-      username: result.username,
-      namespacePath: result.namespacePath,
-      defaultModel: result.defaultModel,
-      modelsCount: result.modelsCount,
-    }, 201);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error("[API accounts] Failed to create GitLab Duo account:", error);
-    return c.json({ error: `Failed to create GitLab Duo account: ${msg}` }, 500);
-  }
-});
-
-/**
- * POST /api/accounts/gitlab-duo/:id/refresh - Re-resolve namespace + models for
- * an existing account. Useful after the user changes their default namespace
- * or when GitLab adds new selectable models to your tier.
- */
-accountsRouter.post("/gitlab-duo/:id/refresh", async (c) => {
-  const id = Number(c.req.param("id"));
-  let account;
-  try {
-    [account] = await db.select().from(accounts).where(eq(accounts.id, id));
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error("[API accounts] Failed to fetch account for GitLab Duo refresh:", error);
-    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
-  }
-  if (!account || account.provider !== "gitlab-duo") {
-    return c.json({ error: "Not a GitLab Duo account" }, 404);
-  }
-
-  let tokens: { gitlabBaseUrl: string; namespaceId?: number };
-  try {
-    tokens = (typeof account.tokens === "string"
-      ? JSON.parse(account.tokens)
-      : account.tokens) as { gitlabBaseUrl: string; namespaceId?: number };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[API accounts] Failed to parse GitLab Duo tokens for account ${id}:`, error);
-    return c.json({ error: `Corrupt account tokens: ${msg}` }, 500);
-  }
-  let oldMeta: Record<string, unknown>;
-  try {
-    oldMeta = (typeof account.metadata === "string"
-      ? JSON.parse(account.metadata)
-      : account.metadata) ?? {};
-  } catch (err) {
-    console.warn(`[API accounts] Failed to parse metadata for account ${id}:`, err);
-    oldMeta = {};
-  }
-  let pat: string;
-  try {
-    pat = decrypt(account.password);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[API accounts] Failed to decrypt GitLab Duo PAT for account ${id}:`, error);
-    return c.json({ error: `Failed to decrypt PAT: ${msg}` }, 500);
-  }
-  const baseUrl = tokens.gitlabBaseUrl;
-
-  const headers = {
-    "Private-Token": pat,
-    "Content-Type": "application/json",
-    "User-Agent": "etteum-pool/gitlab-duo",
-  };
-
-  try {
-    // 1. Re-resolve duoDefaultNamespace (it can change in GitLab Preferences UI),
-    //    or fall back to the user's first writable group.
-    const userR = await fetch(`${baseUrl}/api/graphql`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        operationName: "getUser",
-        query: `query getUser {
-          currentUser {
-            userPreferences { duoDefaultNamespace { id fullPath } }
-            groups(first: 1, permissionScope: CREATE_PROJECTS) {
-              nodes { id fullPath }
-            }
-          }
-        }`,
-        variables: {},
-      }),
-    });
-    const userJson = (await userR.json()) as any;
-    const cu = userJson.data?.currentUser;
-    const duoNs = cu?.userPreferences?.duoDefaultNamespace;
-    const fallbackNs = cu?.groups?.nodes?.[0];
-    const ns = duoNs ?? fallbackNs;
-    if (!ns) return c.json({ error: "no namespace resolvable for this PAT" }, 400);
-
-    const namespaceId = Number(String(ns.id).split("/").pop());
-    const namespacePath = ns.fullPath;
-
-    // 2. Re-fetch the available models for that namespace
-    const modelsR = await fetch(`${baseUrl}/api/graphql`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        operationName: "lsp_aiChatAvailableModels",
-        query: `query lsp_aiChatAvailableModels($rootNamespaceId: GroupID!) {
-          metadata { version }
-          aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
-            defaultModel { name ref }
-            selectableModels { name ref }
-          }
-        }`,
-        variables: { rootNamespaceId: `gid://gitlab/Group/${namespaceId}` },
-      }),
-    });
-    const modelsJson = (await modelsR.json()) as any;
-    const dm = modelsJson.data?.aiChatAvailableModels?.defaultModel;
-    const sm = modelsJson.data?.aiChatAvailableModels?.selectableModels;
-    const gitlabVersion = modelsJson.data?.metadata?.version ?? oldMeta.gitlabVersion ?? "";
-
-    const nextTokens = { ...tokens, namespaceId, namespacePath };
-    const nextMeta = {
-      ...oldMeta,
-      defaultModel: dm?.ref ?? oldMeta.defaultModel ?? "claude_sonnet_4_6_vertex",
-      availableModels: Array.isArray(sm) ? sm : oldMeta.availableModels ?? [],
-      gitlabVersion,
-    };
-
-    // 3. Pull current GitLab Credits balance via trialUsage so quota columns
-    //    reflect the live wallet (creditsUsed / totalCredits per user).
-    let quotaLimit = account.quotaLimit ?? 0;
-    let quotaRemaining = account.quotaRemaining ?? 0;
-    let quotaResetAt: Date | null = account.quotaResetAt ?? null;
-    try {
-      const { providers } = await import("../proxy/router");
-      const duoProvider = providers["gitlab-duo"];
-      if (duoProvider) {
-        const probe = await duoProvider.fetchQuota({
-          ...account,
-          tokens: nextTokens,
-          metadata: nextMeta,
-        });
-        if (probe.success && probe.quota && probe.quota.limit >= 0) {
-          quotaLimit = probe.quota.limit;
-          quotaRemaining = probe.quota.remaining;
-          if (probe.quota.resetAt instanceof Date) quotaResetAt = probe.quota.resetAt;
-        }
-      }
-    } catch (err) {
-      // Non-fatal — keep stored quota values.
-      console.warn(`[GitLab Duo] Quota probe failed for account ${id}:`, err);
-    }
-
-    await db.update(accounts)
-      .set({
-        tokens: nextTokens,
-        metadata: nextMeta,
-        quotaLimit,
-        quotaRemaining,
-        quotaResetAt,
-        updatedAt: new Date(),
-      })
-      .where(eq(accounts.id, id));
-
-    // Trigger provider cache refresh so the new model list is routable immediately
-    const { refreshGitlabDuoModels } = await import("../proxy/providers/registry");
-    await refreshGitlabDuoModels();
-
-    return c.json({
-      success: true,
-      namespacePath,
-      namespaceId,
-      defaultModel: nextMeta.defaultModel,
-      modelsCount: nextMeta.availableModels.length,
-      quotaLimit,
-      quotaRemaining,
-      quotaResetAt,
-    });
-  } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-  }
-});
 
 /**
  * GET /api/accounts/:id - Get single account
@@ -1378,12 +860,12 @@ accountsRouter.get("/:id", async (c) => {
  */
 accountsRouter.post("/", async (c) => {
   const body = await c.req.json<{
-    provider: "kiro" | "kiro-pro" | "codebuddy" | "codebuddy-china" | "canva" | "codex" | "qoder" | "gitlab-duo" | "youmind";
+    provider: Provider;
     email?: string;
     password?: string;
     personalToken?: string;
-    apiKey?: string; // YouMind sk-ym-... key
-    apiKeys?: string; // CodeBuddy China bulk: newline-separated ck_... keys
+    apiKey?: string; // Single API key flow (ck_...): codebuddy / codebuddy-china
+    apiKeys?: string; // Bulk API key flow: newline-separated ck_... keys
     accessToken?: string; // CodeBuddy global/CN: OAuth access_token (JWT)
     access_token?: string; // snake_case alias for accessToken
     refresh_token?: string; // snake_case alias for tokens.refresh_token
@@ -1747,108 +1229,19 @@ accountsRouter.post("/", async (c) => {
 
 /**
  * POST /api/accounts/instant-login - Instant login via refresh token (bulk)
- * No browser needed — just exchange refresh token for access token
- * Body: { tokens: ["refreshToken1", ...], provider?: "kiro-pro" | "codex" }
- *
- * - kiro-pro (default): tokens are Kiro AWS Identity refresh tokens
- * - codex: tokens are OpenAI OAuth refresh tokens (start with rt_*, ~200 chars)
+ * No browser needed — just exchange refresh token for access token.
+ * Codex-only: tokens are OpenAI OAuth refresh tokens (start with rt_*, ~200 chars).
  */
 accountsRouter.post("/instant-login", async (c) => {
-  const body = await c.req.json<{ tokens: string[]; provider?: "kiro-pro" | "codex" }>();
-  const provider = body.provider || "kiro-pro";
+  const body = await c.req.json<{ tokens: string[] }>();
 
   if (!body.tokens || !Array.isArray(body.tokens) || body.tokens.length === 0) {
     return c.json({ error: "tokens array is required (array of refresh token strings)" }, 400);
   }
 
-  if (provider === "codex") {
-    return await handleCodexInstantLogin(c, body.tokens);
-  }
-
-  const REFRESH_URL = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken";
-  const KIRO_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK";
-  let success = 0;
-  let failed = 0;
-  const errors: string[] = [];
-
-  for (const refreshToken of body.tokens) {
-    const trimmed = refreshToken.trim();
-    if (!trimmed) { failed++; continue; }
-
-    try {
-      const response = await fetch(REFRESH_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: trimmed }),
-      });
-
-      if (!response.ok) {
-        errors.push(`token ...${trimmed.slice(-8)}: refresh failed (${response.status})`);
-        failed++;
-        continue;
-      }
-
-      const data = await response.json() as {
-        accessToken?: string;
-        refreshToken?: string;
-        expiresAt?: string;
-      };
-
-      if (!data.accessToken) {
-        errors.push(`token ...${trimmed.slice(-8)}: no access token received`);
-        failed++;
-        continue;
-      }
-
-      // Generate email identifier from token (Kiro tokens are not JWT, can't extract email)
-      // Use a hash of the refresh token as unique identifier
-      const tokenHash = trimmed.slice(10, 18);
-      let email = `kiro-${tokenHash}@token.local`;
-
-      const tokens = {
-        access_token: data.accessToken,
-        refresh_token: data.refreshToken || trimmed,
-        expires_at: data.expiresAt || null,
-        profile_arn: KIRO_PROFILE_ARN,
-      };
-
-      // Create or update account as active with tokens
-      const existing = await db.select().from(accounts)
-        .where(eq(accounts.email, email))
-        .then((rows) => rows.find((r) => r.provider === "kiro-pro"));
-
-      if (existing) {
-        await db.update(accounts).set({
-          status: "active",
-          tokens: tokens as unknown,
-          errorMessage: null,
-          lastLoginAt: new Date(),
-          updatedAt: new Date(),
-        }).where(eq(accounts.id, existing.id));
-      } else {
-        await db.insert(accounts).values({
-          provider: "kiro-pro",
-          email,
-          password: encrypt("instant-login"),
-          status: "active",
-          tokens: tokens as unknown,
-          lastLoginAt: new Date(),
-        });
-      }
-      success++;
-    } catch (err) {
-      errors.push(`token ...${trimmed.slice(-8)}: ${err instanceof Error ? err.message : String(err)}`);
-      failed++;
-    }
-  }
-
-  pool.invalidate("kiro-pro" as ProviderName);
-  if (success > 0) {
-    broadcast({ type: "accounts_updated", data: { provider: "kiro-pro", count: success } });
-  }
-
-  return c.json({ success, failed, errors: errors.length > 0 ? errors : undefined });
+  return await handleCodexInstantLogin(c, body.tokens);
 });
+
 
 /**
  * POST /api/accounts/bulk - Create multiple accounts
@@ -1856,7 +1249,7 @@ accountsRouter.post("/instant-login", async (c) => {
 accountsRouter.post("/bulk", async (c) => {
   const body = await c.req.json<{
     accounts: Array<{
-      provider: "kiro" | "codebuddy" | "canva" | "codex";
+      provider: Provider;
       email: string;
       password: string;
     }>;
@@ -3021,186 +2414,176 @@ accountsRouter.post("/grok-cli/import", async (c) => {
   }
 });
 
+
+// ============================================================================
+// Antigravity (Google Cloud Code Assist) Account Import Functions
+// ============================================================================
+
+export async function completeAntigravityOAuthLogin(code: string, redirectUri: string, _state?: string): Promise<{
+  id: number;
+  provider: "antigravity";
+  email: string;
+  name?: string;
+  projectId: string;
+}> {
+  // 9router pattern: public installed-app client, no PKCE, no env config.
+  const tokenResponse = await fetch(ANTIGRAVITY_OAUTH.tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: ANTIGRAVITY_OAUTH.clientId,
+      client_secret: ANTIGRAVITY_OAUTH.clientSecret,
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  if (!tokenResponse.ok) {
+    const text = await tokenResponse.text();
+    throw new Error(`Token exchange failed: ${text}`);
+  }
+
+  const tokens = (await tokenResponse.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    scope?: string;
+  };
+  if (!tokens.access_token) {
+    throw new Error("No access_token in OAuth response");
+  }
+
+  const userinfoResponse = await fetch(`${ANTIGRAVITY_OAUTH.userinfoUrl}?alt=json`, {
+    headers: { "Authorization": `Bearer ${tokens.access_token}` },
+  });
+  const userInfo = userinfoResponse.ok
+    ? ((await userinfoResponse.json()) as { id?: string; email?: string; name?: string })
+    : {};
+  const email = (userInfo.email || `antigravity-${code.slice(-8)}@oauth.local`).toLowerCase();
+
+  console.log(`[Antigravity OAuth] token ok, provisioning project for ${email}...`);
+  let projectId: string;
+  try {
+    projectId = await discoverOrProvisionProject(tokens.access_token);
+  } catch (err) {
+    console.error(`[Antigravity OAuth] provisioning FAILED:`, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+  console.log(`[Antigravity OAuth] provisioned projectId=${projectId}`);
+
+  const credential = {
+    accessToken: tokens.access_token,
+    projectId,
+    email,
+    refreshToken: tokens.refresh_token,
+    expiresAt: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : undefined,
+    scope: tokens.scope,
+  };
+
+  const id = await upsertAntigravityAccount(email, credential);
+  pool.invalidate("antigravity" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "antigravity", count: 1 } });
+  broadcast({ type: "account_created", data: { id, provider: "antigravity", email } });
+
+  return { id, provider: "antigravity", email, name: userInfo.name || email, projectId };
+}
+
+async function upsertAntigravityAccount(email: string, tokens: unknown): Promise<number> {
+  const existing = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.email, email))
+    .then((rows) => rows.find((r) => r.provider === "antigravity"));
+
+  if (existing) {
+    await db
+      .update(accounts)
+      .set({
+        status: "active",
+        tokens: tokens as unknown,
+        errorMessage: null,
+        lastLoginAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(accounts.id, existing.id));
+    return existing.id;
+  }
+
+  const inserted = await db
+    .insert(accounts)
+    .values({
+      provider: "antigravity",
+      email,
+      password: encrypt("oauth-google"),
+      status: "active",
+      tokens: tokens as unknown,
+      lastLoginAt: new Date(),
+    })
+    .returning();
+
+  return inserted[0]!.id;
+}
+
 /**
- * POST /api/accounts/:id/open-panel - Open web panel in browser with auto-login
- * Supports: kiro, kiro-pro, qoder
+ * POST /api/accounts/antigravity/import - Import Antigravity account via API
  */
-accountsRouter.post("/:id/open-panel", async (c) => {
-  const id = Number(c.req.param("id"));
-  let account;
+accountsRouter.post("/antigravity/import", async (c) => {
+  let body: {
+    email?: string;
+    tokens?: Record<string, unknown>;
+    displayName?: string;
+  };
+
   try {
-    [account] = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, id));
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[API accounts] Failed to fetch account ${id} for open-panel:`, error);
-    return c.json({ error: `Failed to fetch account: ${msg}` }, 500);
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  if (!account) {
-    return c.json({ error: "Account not found" }, 404);
+  const email = (body.email || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return c.json({ error: "email is required and must be valid" }, 400);
   }
 
-  let tokens: any;
-  try {
-    tokens = typeof account.tokens === "string"
-      ? JSON.parse(account.tokens)
-      : account.tokens;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[API accounts] Failed to parse tokens for account ${id}:`, error);
-    return c.json({ error: `Corrupt account tokens: ${msg}` }, 500);
+  if (!body.tokens || typeof body.tokens !== "object") {
+    return c.json({ error: "tokens object is required" }, 400);
   }
 
-  if (!tokens) {
-    return c.json({ error: "No tokens available" }, 400);
+  const tokens = body.tokens as Record<string, unknown>;
+  
+  if (!tokens.accessToken || typeof tokens.accessToken !== "string") {
+    return c.json({ error: "tokens.accessToken is required" }, 400);
   }
 
-  let browser: Awaited<ReturnType<typeof import("playwright")["chromium"]["launch"]>> | null = null;
-  try {
-    const { chromium } = await import("playwright");
-    browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext();
+  if (!tokens.projectId || typeof tokens.projectId !== "string") {
+    return c.json({ error: "tokens.projectId is required" }, 400);
+  }
 
-    if (account.provider.startsWith("kiro")) {
-      if (!tokens.refresh_token) {
-        await browser.close();
-        return c.json({ error: "No refresh token available" }, 400);
-      }
-
-      // Refresh to get fresh access token
-      const refreshResp = await fetch("https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: tokens.refresh_token }),
-      });
-
-      if (!refreshResp.ok) {
-        await browser.close();
-        return c.json({ error: `Token refresh failed: ${refreshResp.status}` }, 500);
-      }
-
-      const refreshData = (await refreshResp.json()) as {
-        accessToken?: string;
-        refreshToken?: string;
-        profileArn?: string;
-      };
-
-      const accessToken = refreshData.accessToken;
-      const refreshToken = refreshData.refreshToken || tokens.refresh_token;
-      const profileArn = tokens.profile_arn || tokens.profileArn || refreshData.profileArn || "";
-
-      // Extract userId from getUsageLimits response (cached in metadata or from profileArn)
-      const meta = (account.metadata || {}) as Record<string, unknown>;
-      let userId = (meta.kiroUserId as string) || "";
-      if (!userId) {
-        // Try to fetch userId from getUsageLimits
-        try {
-          const url = new URL("https://q.us-east-1.amazonaws.com/getUsageLimits");
-          url.searchParams.set("origin", "AI_EDITOR");
-          url.searchParams.set("resourceType", "AGENTIC_REQUEST");
-          url.searchParams.set("profileArn", profileArn);
-          const usageResp = await fetch(url.toString(), {
-            headers: {
-              Accept: "application/json",
-              Authorization: `Bearer ${accessToken}`,
-              "User-Agent": "KiroIDE/compatible pool-proxy/1.0.0",
-            },
-          });
-          if (usageResp.ok) {
-            const usageData = (await usageResp.json()) as { userInfo?: { userId?: string } };
-            userId = usageData.userInfo?.userId || "";
-          }
-        } catch (err) {
-          console.warn(`[Open Panel] Failed to fetch Kiro userId for account ${id}:`, err);
-        }
-      }
-
-      await context.addCookies([
-        { name: "AccessToken", value: accessToken || "", domain: "app.kiro.dev", path: "/" },
-        { name: "RefreshToken", value: refreshToken, domain: "app.kiro.dev", path: "/" },
-        { name: "UserId", value: userId, domain: "app.kiro.dev", path: "/" },
-        { name: "Idp", value: "Google", domain: "app.kiro.dev", path: "/" },
-      ]);
-
-      const page = await context.newPage();
-      await page.goto("https://app.kiro.dev/settings/account");
-
-      return c.json({ success: true, message: `Browser opened for ${account.email}` });
-    } else if (account.provider === "qoder") {
-      // Qoder: inject stored web cookies
-      const webCookie = tokens.web_cookie as string | undefined;
-      if (!webCookie) {
-        await browser.close();
-        return c.json({ error: "No web_cookie available for Qoder account" }, 400);
-      }
-
-      // Parse cookie string into array
-      const cookies = webCookie.split("; ").map((pair) => {
-        const idx = pair.indexOf("=");
-        if (idx === -1) return null;
-        const name = pair.slice(0, idx);
-        const value = pair.slice(idx + 1);
-        return { name, value };
-      }).filter((c): c is { name: string; value: string } => c !== null);
-
-      // Filter to qoder.com-relevant cookies and add domain
-      const qoderCookies = cookies
-        .filter((c) => {
-          // Include qoder-specific cookies
-          if (c.name.startsWith("qoder_") || c.name === "tfstk" || c.name === "cbc" || c.name === "test_cookie") {
-            return true;
-          }
-          // Include tracking cookies
-          if (c.name.startsWith("_ga") || c.name.startsWith("_gcl") || c.name.startsWith("_nb")) {
-            return true;
-          }
-          // Include other misc cookies
-          if (c.name === "OTZ" || c.name.startsWith("_c_")) {
-            return true;
-          }
-          return false;
-        })
-        .map((c) => ({
-          name: c.name,
-          value: c.value,
-          domain: "qoder.com",
-          path: "/",
-        }));
-
-      if (qoderCookies.length === 0) {
-        await browser.close();
-        return c.json({ error: "No valid Qoder cookies found in web_cookie" }, 400);
-      }
-
-      await context.addCookies(qoderCookies);
-
-      const page = await context.newPage();
-      await page.goto("https://qoder.com/account/profile");
-
-      return c.json({
-        success: true,
-        message: `Browser opened for ${account.email}`,
-        cookiesInjected: qoderCookies.length,
-      });
-    } else {
-      await browser.close();
-      return c.json({
-        error: `Open panel not supported for provider: ${account.provider}`,
+  // Ensure email matches token metadata if available
+  if (typeof tokens.email === "string") {
+    if (tokens.email.toLowerCase() !== email) {
+      return c.json({ 
+        error: "Email mismatch between request and tokens",
+        request_email: email,
+        token_email: tokens.email
       }, 400);
     }
-  } catch (error) {
-    // Best-effort: close the browser on error. For kiro/qoder paths that
-    // succeed, the browser stays open intentionally so the user can interact.
-    if (browser) {
-      try { await browser.close(); } catch { /* already closing */ }
-    }
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[API accounts] Failed to open panel for account ${id}:`, error);
-    return c.json({
-      error: `Failed to open browser: ${msg}`,
-    }, 500);
+  } else {
+    tokens.email = email;
   }
+
+  const id = await upsertAntigravityAccount(email, tokens);
+  pool.invalidate("antigravity" as ProviderName);
+  broadcast({ type: "accounts_updated", data: { provider: "antigravity", count: 1 } });
+  broadcast({ type: "account_created", data: { id, provider: "antigravity", email } });
+
+  return c.json({
+    success: true,
+    id,
+    provider: "antigravity",
+    email,
+    name: body.displayName || email,
+    projectId: tokens.projectId,
+  });
 });

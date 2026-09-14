@@ -11,14 +11,16 @@ import {
   openAIToAnthropic,
   type AnthropicMessagesRequest,
 } from "./transforms/anthropic";
-import { getSseError, isBadUpstreamRequest, isInvalidModelError, isNonAccountRequestError } from "./errors";
-import { prepareLogBody } from "./logging";
+import { getSseError, getSseErrorFromParsed, isBadUpstreamRequest, isInvalidModelError, isNonAccountRequestError } from "./errors";
+import { buildStreamLogSummary, prepareLogBody } from "./logging";
+import { checkAcl, recordUsage, type ApiKeyRow } from "../services/api-keys";
 import { resolveModelAlias } from "./model-mapping";
 import { resolveCombo, getCombosCached } from "./combos";
 import { eq, sql } from "drizzle-orm";
-import { providerList, refreshByokModels } from "./providers/registry";
+import { providerList, ensureByokModelsFresh } from "./providers/registry";
+import { config } from "../config";
 
-export const proxyRouter = new Hono();
+export const proxyRouter = new Hono<{ Variables: { apiKey?: ApiKeyRow; apiKeyId?: number } }>();
 
 const MAX_REQUEST_LOGS = 50;
 
@@ -97,16 +99,19 @@ export async function recordRequest(entry: NewRequestLog) {
   }
 }
 
-/** Strip Claude Code context tags + common typos before routing. */
+const NORMALIZE_ETTEUM_PREFIX = /^etteum\//i;
+const NORMALIZE_CONTEXT_TAG = /\[[\d.]+[kKmM]\]$/;
+const NORMALIZE_SONET_TYPO = /claude-sonet/gi;
+/** Strip the assistant context tags + common typos before routing. */
 export function normalizeModelId(model: string): string {
-  // Claude Code appends context-window tags (e.g. "[1m]", "[200k]") for auto-mode
+  // the assistant appends context-window tags (e.g. "[1m]", "[200k]") for auto-mode
   // classifier / long-context picks. Upstream BYOK providers (Grok, etc.) reject them.
   // Common typo: "sonet" -> "sonnet".
   return model
-    .replace(/^etteum\//i, "") // integration configs prefix "etteum/"; combo names + pool ids are unprefixed
-    .replace(/\[[\d.]+[kKmM]\]$/g, "")
-    .replace(/claude-sonet/gi, "claude-sonnet");
-}
+    .replace(NORMALIZE_ETTEUM_PREFIX, "") // integration configs prefix "etteum/"; combo names + pool ids are unprefixed
+     .replace(NORMALIZE_CONTEXT_TAG, "")
+     .replace(NORMALIZE_SONET_TYPO, "claude-sonnet");
+ }
 
 
 function computeCredits(
@@ -116,6 +121,11 @@ function computeCredits(
   resultCredits?: number,
   resultCreditSource?: CreditSource
 ) {
+  // BYOK keys are user-paid — never charge internal credit or decrement quota.
+  // Tokens still recorded; only the credit figure is zeroed.
+  if (provider === "byok") {
+    return { creditsUsed: 0, creditSource: "exempt" as CreditSource };
+  }
   if (resultCredits !== undefined && resultCredits > 0) {
     return {
       creditsUsed: Math.max(0.01, resultCredits),
@@ -136,52 +146,38 @@ function computeCredits(
   };
 }
 
-function extractUsageFromSsePayload(payload: string) {
+/** Parse an SSE `data:` payload once; null when empty/[DONE]/not JSON. */
+function parseSsePayload(payload: string): any | null {
   if (!payload || payload === "[DONE]") return null;
   try {
-    const parsed = JSON.parse(payload);
-    const usage = parsed.usage;
-    const choice = parsed.choices?.[0];
-    const content = String(
-      choice?.delta?.content ??
-      choice?.message?.content ??
-      choice?.text ??
-      parsed?.delta?.content ??
-      parsed?.content ??
-      parsed?.text ??
-      ""
-    );
-
-    return {
-      content,
-      promptTokens: Number(usage?.prompt_tokens || usage?.input_tokens || 0),
-      completionTokens: Number(usage?.completion_tokens || usage?.output_tokens || 0),
-      totalTokens: Number(usage?.total_tokens || 0),
-      creditsUsed: Number(usage?.credits_used || usage?.creditsUsed || usage?.credit || parsed.credits_used || parsed.creditsUsed || 0),
-    };
+    return JSON.parse(payload);
   } catch {
     return null;
   }
 }
 
-/** Accumulate streamed text content across SSE chunks for token estimation */
-function extractStreamContent(payload: string): string {
-  if (!payload || payload === "[DONE]") return "";
-  try {
-    const parsed = JSON.parse(payload);
-    const choice = parsed.choices?.[0];
-    return String(
-      choice?.delta?.content ??
-      choice?.message?.content ??
-      choice?.text ??
-      parsed?.delta?.content ??
-      parsed?.content ??
-      parsed?.text ??
-      ""
-    );
-  } catch {
-    return "";
-  }
+function extractUsageFromParsed(parsed: any) {
+  const usage = parsed?.usage;
+  return {
+    promptTokens: Number(usage?.prompt_tokens || usage?.input_tokens || 0),
+    completionTokens: Number(usage?.completion_tokens || usage?.output_tokens || 0),
+    totalTokens: Number(usage?.total_tokens || 0),
+    creditsUsed: Number(usage?.credits_used || usage?.creditsUsed || usage?.credit || parsed?.credits_used || parsed?.creditsUsed || 0),
+  };
+}
+
+/** Extract streamed text content from an already-parsed SSE payload */
+function extractContentFromParsed(parsed: any): string {
+  const choice = parsed?.choices?.[0];
+  return String(
+    choice?.delta?.content ??
+    choice?.message?.content ??
+    choice?.text ??
+    parsed?.delta?.content ??
+    parsed?.content ??
+    parsed?.text ??
+    ""
+  );
 }
 
 function estimateTokensFromText(text: string): number {
@@ -301,8 +297,11 @@ async function peekStreamForError(
         if (!trimmedPayload || trimmedPayload === "[DONE]") continue;
         // First decision in event order wins: an error seen before content
         // enables fallback; once content starts, never fall back.
-        if (!error) error = getSseError(trimmedPayload) ?? undefined;
-        if (extractStreamContent(trimmedPayload)) contentStarted = true;
+        const parsed = parseSsePayload(trimmedPayload);
+        if (parsed) {
+          if (!error) error = getSseErrorFromParsed(parsed) ?? undefined;
+          if (extractContentFromParsed(parsed)) contentStarted = true;
+        }
         if (error || contentStarted) break;
       }
     }
@@ -364,6 +363,7 @@ function wrapStreamWithUsageFinalizer(
     model: string;
     quotaBefore: number;
     startedAt: number;
+    apiKeyId?: number;
     fallbackPromptTokens: number;
     fallbackCompletionTokens: number;
     fallbackTotalTokens: number;
@@ -374,7 +374,10 @@ function wrapStreamWithUsageFinalizer(
   const decoder = new TextDecoder();
   let reader: ReturnType<ReadableStream<Uint8Array>["getReader"]> | undefined;
   let buffer = "";
-  let streamedContent = "";
+  const contentChunks: string[] = [];
+  let retainedChars = 0;
+  let streamedBytes = 0;
+  let deliveredBytes = 0;
   let promptTokens = 0;
   let completionTokens = 0;
   let totalTokens = 0;
@@ -392,18 +395,27 @@ function wrapStreamWithUsageFinalizer(
       if (!trimmed.startsWith("data:")) continue;
       const payload = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
 
-      // Detect upstream errors in SSE stream (upstream_error body, OpenAI error format)
       const trimmedPayload = payload.trim();
-      if (trimmedPayload && trimmedPayload !== "[DONE]" && getSseError(trimmedPayload)) {
-        streamError = true;
+      const parsed = parseSsePayload(trimmedPayload);
+      if (!parsed) continue;
+
+      // Detect upstream errors in SSE stream (upstream_error body, OpenAI error format)
+      if (getSseErrorFromParsed(parsed)) streamError = true;
+
+      // Always extract content for estimation, even if no usage field.
+      // Cap the retained text at 256KB: it is only used for token estimation,
+      // and appending unbounded chunks would let one big stream eat unbounded
+      // memory. Exact length still tracked via streamedBytes for the estimate.
+      const content = extractContentFromParsed(parsed);
+      if (content) {
+        streamedBytes += content.length;
+        if (retainedChars < 256 * 1024) {
+          contentChunks.push(content);
+          retainedChars += content.length;
+        }
       }
 
-      // Always extract content for estimation, even if no usage field
-      const content = extractStreamContent(trimmedPayload);
-      if (content) streamedContent += content;
-
-      const usage = extractUsageFromSsePayload(trimmedPayload);
-      if (!usage) continue;
+      const usage = extractUsageFromParsed(parsed);
       promptTokens = usage.promptTokens || promptTokens;
       completionTokens = usage.completionTokens || completionTokens;
       totalTokens = usage.totalTokens || totalTokens;
@@ -416,7 +428,12 @@ function wrapStreamWithUsageFinalizer(
     finalized = true;
 
     const finalPromptTokens = promptTokens || context.fallbackPromptTokens;
-    const finalCompletionTokens = completionTokens || estimateTokensFromText(streamedContent) || context.fallbackCompletionTokens;
+    // When the 256KB retention cap was hit, retained chunks understate the
+    // stream; fall back to the exact accumulated length for the estimate.
+    const streamedEstimate = streamedBytes > retainedChars
+      ? Math.max(1, Math.ceil(streamedBytes / 4))
+      : estimateTokensFromText(contentChunks.join(""));
+    const finalCompletionTokens = completionTokens || streamedEstimate || context.fallbackCompletionTokens;
     const finalTotalTokens = totalTokens || finalPromptTokens + finalCompletionTokens || context.fallbackTotalTokens;
     const { creditsUsed, creditSource } = computeCredits(
       context.provider,
@@ -429,15 +446,21 @@ function wrapStreamWithUsageFinalizer(
 
     void (async () => {
       try {
-        // If stream had upstream error (403 rate limit, empty stream, etc), don't decrement quota.
-        if (streamError) {
+        // If stream had upstream error (403 rate limit, etc) or delivered zero
+        // bytes (client saw a blank response), log error — don't decrement quota.
+        const emptyStream = !streamError && deliveredBytes === 0;
+        if (streamError || emptyStream) {
           // Still update request log with error status
           if (context.logId) {
+            const streamErrorMessage = emptyStream
+              ? "Upstream stream delivered no data"
+              : "Upstream rate limit or quota exceeded";
             await db
               .update(requestLogs)
               .set({
                 status: "error",
-                errorMessage: "Upstream rate limit or quota exceeded",
+                errorMessage: streamErrorMessage,
+                responseBody: prepareLogBody({ error: streamErrorMessage }),
                 durationMs,
               })
               .where(eq(requestLogs.id, context.logId));
@@ -461,6 +484,15 @@ function wrapStreamWithUsageFinalizer(
               creditsUsed,
               durationMs,
               accountQuotaAfter: quotaAfter,
+              responseBody: prepareLogBody(buildStreamLogSummary({
+                model: context.model,
+                content: contentChunks.join(""),
+                contentBytes: new TextEncoder().encode(contentChunks.join("")).byteLength,
+                promptTokens: finalPromptTokens,
+                completionTokens: finalCompletionTokens,
+                totalTokens: finalTotalTokens,
+                creditSource,
+              })),
             })
             .where(eq(requestLogs.id, context.logId));
         }
@@ -501,6 +533,8 @@ function wrapStreamWithUsageFinalizer(
           promptTokens: finalPromptTokens, completionTokens: finalCompletionTokens,
           totalTokens: finalTotalTokens, creditsUsed, durationMs,
         });
+        // Per-API-key usage recording (monthly + lifetime counters)
+        if (context.apiKeyId) void recordUsage(context.apiKeyId, finalTotalTokens);
         if (++requestCounter % 10 === 0) void pruneRequestLogs();
       } catch (error) {
         console.error("[Proxy] Failed to finalize stream usage:", error);
@@ -519,7 +553,14 @@ function wrapStreamWithUsageFinalizer(
           const { done, value } = await streamReader.read();
           if (done) break;
           observe(value);
+          // Stream byte cap — abort oversized upstream streams (memory guard).
+          streamedBytes += value.byteLength;
+          if (streamedBytes > config.maxStreamBytes) {
+            controller.error(new Error("Upstream stream exceeded size limit"));
+            return;
+          }
           controller.enqueue(value);
+          deliveredBytes += value.byteLength;
         }
       } catch (error) {
         controller.error(error);
@@ -543,7 +584,7 @@ function wrapStreamWithUsageFinalizer(
   });
 }
 
-async function handleChatCompletion(body: ChatCompletionRequest) {
+async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKeyRow) {
   // Resolve combos FIRST: an exact combo name wins over model aliasing. The
   // combo loop tries each target in order, falling back to the next on failure.
   // (routeRequest still retries accounts within a provider; this adds the
@@ -555,7 +596,7 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
       const target = comboName[i]!; // parseTargets guarantees 1..10 entries
       const attemptBody: ChatCompletionRequest = { ...body, model: target };
       try {
-        return await handleChatCompletionSingle(attemptBody, { originalModel: body.model, combo: body.model });
+        return await handleChatCompletionSingle(attemptBody, { originalModel: body.model, combo: body.model }, apiKey);
       } catch (error) {
         // Permanent request errors (bad model, content moderation, malformed
         // request) fail on every target — don't waste the remaining targets.
@@ -573,21 +614,34 @@ async function handleChatCompletion(body: ChatCompletionRequest) {
 
   // No combo: existing alias rewrite + single route path, unchanged.
   body = { ...body, model: resolveModelAlias(normalizeModelId(body.model)) };
-  return handleChatCompletionSingle(body, undefined);
+  return handleChatCompletionSingle(body, undefined, apiKey);
 }
 
 async function handleChatCompletionSingle(
   body: ChatCompletionRequest,
-  comboMeta: { originalModel: string; combo: string } | undefined
+  comboMeta: { originalModel: string; combo: string } | undefined,
+  apiKey?: ApiKeyRow
 ) {
-const isStream = body.stream === true;
+  // ACL: provider/model allow/deny per API key — uses the row resolved by the
+  // auth middleware, no re-fetch.
+  if (apiKey) {
+    const providerForAcl = pool.getProviderForModel(body.model);
+    const acl = await checkAcl(apiKey, { provider: providerForAcl ?? undefined, model: body.model });
+    if (!acl.allowed) {
+      throw new Error(acl.reason || "Not allowed");
+    }
+  }
+  const apiKeyId = apiKey?.id;
+  const isStream = body.stream === true;
   const { result, account, provider, durationMs, compressionStats } = await routeRequest(body, isStream);
   let shouldReleaseTracking = true;
 
   try {
     // Detect upstream SSE errors BEFORE returning the stream so combo fallback
     // can still fire. Once valid content has started, pass through untouched.
-    if (isStream && result.stream) {
+    // BYOK is OpenAI-compatible — errors come as HTTP status codes, not SSE.
+    // Skip peek to avoid hanging on slow upstream and Bun/Windows crash.
+    if (isStream && result.stream && provider !== "byok") {
       const peek = await peekStreamForError(result.stream);
       if (peek.error) throw new Error(peek.error);
       result.stream = peek.stream;
@@ -653,6 +707,7 @@ const isStream = body.stream === true;
       logId: created?.id,
       accountId: account.id,
       accountEmail: account.email,
+      apiKeyId,
       provider,
       model: body.model,
       quotaBefore,
@@ -669,6 +724,9 @@ const isStream = body.stream === true;
     }
 
   await db.insert(requestLogs).values(logEntry);
+
+  // Per-API-key usage recording (monthly + lifetime counters)
+  if (apiKeyId) void recordUsage(apiKeyId, totalTokens);
 
   // Upsert to usage_summary + periodic prune
   void upsertUsageSummary({
@@ -692,9 +750,9 @@ const isStream = body.stream === true;
  * GET /v1/models - List available models
  */
 proxyRouter.get("/v1/models", async (c) => {
-  // Ensure BYOK cache is fresh before listing models.
-  // Without this, the sync getModels() returns stale/empty supportedModels.
-  await refreshByokModels();
+  // Ensure BYOK cache is fresh before listing models (stale check only, no
+  // forced reload — CRUD paths force-refresh via refreshByokModels()).
+  await ensureByokModelsFresh();
   const models = getAllModels();
   // Merge combos as synthetic model entries after the real models so clients
   // can discover and request the virtual combo names.
@@ -753,9 +811,10 @@ proxyRouter.post("/v1/chat/completions", async (c) => {
 
   body.model = normalizeModelId(body.model);
   const isStream = body.stream === true;
+  const apiKey = c.get("apiKey") as ApiKeyRow | undefined;
 
   try {
-    const { result } = await handleChatCompletion(body);
+    const { result } = await handleChatCompletion(body, apiKey);
 
     if (isStream && result.stream) {
       // Return SSE stream
@@ -839,9 +898,10 @@ proxyRouter.post("/v1/messages", async (c) => {
 
   body.model = normalizeModelId(body.model);
   const openAIRequest = anthropicToOpenAI(body);
+  const apiKey = c.get("apiKey") as ApiKeyRow | undefined;
 
   try {
-    const { result } = await handleChatCompletion(openAIRequest);
+    const { result } = await handleChatCompletion(openAIRequest, apiKey);
 
     if (body.stream === true && result.stream) {
       return new Response(openAIStreamToAnthropic(result.stream, body), {

@@ -4,9 +4,29 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import PageHeader from "@/components/layout/PageHeader";
-import { Trash2, Upload, RefreshCw, Power, PowerOff, Download } from "lucide-react";
-import { fetchApi, fetchProxyCountries, scrapeProxies, type ProxyCountry } from "@/lib/api";
+import { Trash2, Upload, RefreshCw, Power, PowerOff, Download, Minus, Plus } from "lucide-react";
+import {
+  fetchApi,
+  fetchProxyCountries,
+  scrapeProxies,
+  addProxies,
+  updateProxy,
+  type ProxyCountry,
+  type ScrapeSourceResult,
+} from "@/lib/api";
 import { useTimedMessage } from "@/hooks/useTimedMessage";
+
+const SCRAPE_SOURCES: { id: string; label: string }[] = [
+  { id: "all", label: "All sources" },
+  { id: "proxyscrape", label: "ProxyScrape" },
+  { id: "geonode", label: "Geonode" },
+  { id: "proxifly", label: "Proxifly" },
+  { id: "thespeedx", label: "TheSpeedX" },
+  { id: "jetkai", label: "Jetkai" },
+  { id: "iplocate", label: "IPLocate" },
+  { id: "vpslab", label: "VPSLab" },
+  { id: "hproxy", label: "HProxy" },
+];
 
 interface ProxyEntry {
   id: number;
@@ -14,6 +34,8 @@ interface ProxyEntry {
   type: string;
   label: string | null;
   status: string;
+  usage: string;
+  priority: number;
   lastUsedAt: string | null;
   lastCheckedAt: string | null;
   errorMessage: string | null;
@@ -33,17 +55,19 @@ export default function ProxyPool() {
   const [pool, setPool] = useState<ProxyPoolStatus>({ count: 0, activeCount: 0, proxies: [] });
   const [loading, setLoading] = useState(true);
   const [bulkText, setBulkText] = useState("");
+  const [bulkPriority, setBulkPriority] = useState(0);
   const [checking, setChecking] = useState(false);
   const { message, setMessage } = useTimedMessage<string>(null, 3000);
 
   // Scrape controls
   const [countries, setCountries] = useState<ProxyCountry[]>([]);
-  const [scrapeSource, setScrapeSource] = useState<"all" | "proxyscrape" | "geonode" | "proxifly">("all");
+  const [scrapeSource, setScrapeSource] = useState("all");
   const [scrapeCountry, setScrapeCountry] = useState("all");
   const [scrapeProtocol, setScrapeProtocol] = useState<"all" | "http" | "socks5">("all");
   const [scrapeLimit, setScrapeLimit] = useState(50);
   const [scrapeVerify, setScrapeVerify] = useState(true);
   const [scraping, setScraping] = useState(false);
+  const [sourceResults, setSourceResults] = useState<ScrapeSourceResult[] | null>(null);
 
   const loadPool = useCallback(async () => {
     try {
@@ -65,14 +89,16 @@ export default function ProxyPool() {
 
   const handleScrape = async () => {
     setScraping(true);
+    setSourceResults(null);
     try {
       const result = await scrapeProxies({
-        source: scrapeSource,
+        source: scrapeSource as any,
         country: scrapeCountry,
         protocol: scrapeProtocol,
         limit: scrapeLimit,
         verify: scrapeVerify,
       });
+      setSourceResults(result.sources ?? null);
       if (result.added > 0) {
         setMessage(
           `Scraped ${result.scraped}, ${result.added} added` +
@@ -114,12 +140,12 @@ export default function ProxyPool() {
     }
 
     try {
-      const result = await fetchApi<{ added: number }>("/api/proxy-pool/pool", {
-        method: "POST",
-        body: JSON.stringify({ proxies }),
-      });
+      const result = await addProxies(proxies, bulkPriority > 0 ? bulkPriority : undefined);
       setBulkText("");
-      setMessage(`${result.added} proxy added`);
+      const parts = [`${result.added} added`];
+      if (result.skipped > 0) parts.push(`${result.skipped} duplicate`);
+      if (result.invalid > 0) parts.push(`${result.invalid} invalid`);
+      setMessage(parts.join(", "));
       loadPool();
     } catch (e: any) {
       setMessage(e.message || "Failed to add proxies");
@@ -136,6 +162,30 @@ export default function ProxyPool() {
       loadPool();
     } catch (e: any) {
       setMessage(e.message || "Failed to toggle proxy");
+    }
+  };
+
+  const handlePriority = async (id: number, priority: number) => {
+    try {
+      await fetchApi(`/api/proxy-pool/pool/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ priority }),
+      });
+      loadPool();
+    } catch (e: any) {
+      setMessage(e.message || "Failed to update priority");
+    }
+  };
+
+  const handleUsage = async (id: number, usage: string) => {
+    try {
+      await fetchApi(`/api/proxy-pool/pool/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ usage }),
+      });
+      loadPool();
+    } catch (e: any) {
+      setMessage(e.message || "Failed to update usage");
     }
   };
 
@@ -176,10 +226,11 @@ export default function ProxyPool() {
   const handleCheckAll = async () => {
     setChecking(true);
     try {
-      const result = await fetchApi<{ checked: number }>("/api/proxy-pool/pool/check-all", {
-        method: "POST",
-      });
-      setMessage(`Checked ${result.checked} proxies`);
+      const result = await fetchApi<{ checked: number; ok: number; failed: number }>(
+        "/api/proxy-pool/pool/check-all",
+        { method: "POST", timeoutMs: 120_000 },
+      );
+      setMessage(`Checked ${result.checked} (${result.ok ?? 0} ok, ${result.failed ?? 0} fail)`);
       loadPool();
     } catch (e: any) {
       setMessage(e.message || "Check all failed");
@@ -222,7 +273,11 @@ export default function ProxyPool() {
             <span aria-hidden className="text-[var(--border)]">·</span>
             <span>{pool.count} total</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
-            <span>HTTP / SOCKS5</span>
+            <span>
+              {pool.proxies.length > 0
+                ? [...new Set(pool.proxies.map((p) => p.type))].sort().join(" / ")
+                : "HTTP / SOCKS5"}
+            </span>
           </>
         }
         actions={
@@ -257,14 +312,27 @@ export default function ProxyPool() {
             <div className="space-y-2 px-3 py-3">
               <textarea
                 className="h-[104px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
-                placeholder={"one per line\nhttp://user:pass@host:port\nsocks5://host:port"}
+                placeholder={"one per line\nhttp://user:pass@host:port\nsocks5://host:port\nhost:8080"}
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
                 aria-label="Proxy list"
               />
-              <Button onClick={handleBulkAdd} size="sm" className="w-full">
-                <Upload className="w-3.5 h-3.5" /> Add to pool
-              </Button>
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <label htmlFor="bulk-priority" className="eyebrow mb-1 block">Default priority</label>
+                  <Input
+                    id="bulk-priority"
+                    type="number"
+                    min={0}
+                    value={bulkPriority}
+                    onChange={(e) => setBulkPriority(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                    className="font-mono tabular-nums"
+                  />
+                </div>
+                <Button onClick={handleBulkAdd} size="sm" className="mt-4">
+                  <Upload className="w-3.5 h-3.5" /> Add to pool
+                </Button>
+              </div>
             </div>
           </Card>
 
@@ -280,12 +348,11 @@ export default function ProxyPool() {
                     id="scrape-source"
                     className="font-mono text-[11px]"
                     value={scrapeSource}
-                    onChange={(e) => setScrapeSource(e.target.value as typeof scrapeSource)}
+                    onChange={(e) => setScrapeSource(e.target.value)}
                   >
-                    <option value="all">all</option>
-                    <option value="proxyscrape">proxyscrape</option>
-                    <option value="geonode">geonode</option>
-                    <option value="proxifly">proxifly</option>
+                    {SCRAPE_SOURCES.map((s) => (
+                      <option key={s.id} value={s.id}>{s.label}</option>
+                    ))}
                   </Select>
                 </div>
                 <div>
@@ -336,10 +403,29 @@ export default function ProxyPool() {
                 />
                 Health-check first — slower, keeps only working proxies
               </label>
-              <Button onClick={handleScrape} disabled={scraping} size="sm" variant="outline" className="w-full">
+<Button onClick={handleScrape} disabled={scraping} size="sm" variant="outline" className="w-full">
                 <Download className="w-3.5 h-3.5" />
-                {scraping ? "Scraping…" : "Scrape & add"}
+                {scraping ? "Scraping..." : "Scrape & add"}
               </Button>
+              {sourceResults && (
+                <div className="space-y-1 border-t border-[var(--hairline)] pt-2">
+                  {sourceResults.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between gap-2 font-mono text-[10px]">
+                      <span className="flex items-center gap-1.5 text-[var(--muted-foreground)]">
+                        <span
+                          aria-hidden
+                          className="h-1.5 w-1.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: s.status === "fulfilled" ? "var(--success)" : s.status === "empty" ? "var(--warning)" : "var(--error)" }}
+                        />
+                        {s.label}
+                      </span>
+                      <span className="tabular-nums" style={{ color: s.status === "failed" ? "var(--error)" : "var(--foreground)" }}>
+                        {s.status === "failed" ? "failed" : `${s.count}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </Card>
         </div>
@@ -361,6 +447,8 @@ export default function ProxyPool() {
                     <th className="eyebrow px-4 py-2 text-left">Status</th>
                     <th className="eyebrow px-4 py-2 text-right">Latency</th>
                     <th className="eyebrow px-4 py-2 text-right hidden md:table-cell">Ok / Fail</th>
+                    <th className="eyebrow px-4 py-2 text-left hidden md:table-cell">Usage</th>
+                    <th className="eyebrow px-4 py-2 text-right hidden sm:table-cell">Priority</th>
                     <th className="eyebrow px-4 py-2 text-left hidden lg:table-cell">Last used</th>
                     <th className="eyebrow px-4 py-2 text-right"></th>
                   </tr>
@@ -378,7 +466,7 @@ export default function ProxyPool() {
                         <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted-foreground)]">{proxy.type}</span>
                       </td>
                       <td className="px-4 py-2">
-                        <span className="inline-flex items-center gap-1.5" style={{ color: statusTone(proxy.status) }}>
+                        <span className="inline-flex items-center gap-1.5" style={{ color: statusTone(proxy.status) }} title={proxy.errorMessage ?? proxy.status}>
                           <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: statusTone(proxy.status) }} />
                           {proxy.status}
                         </span>
@@ -390,6 +478,46 @@ export default function ProxyPool() {
                         <span className="text-[var(--success)]">{proxy.successCount}</span>
                         {" / "}
                         <span className={proxy.failCount > 0 ? "text-[var(--error)]" : ""}>{proxy.failCount}</span>
+                      </td>
+                      <td className="px-4 py-2 hidden md:table-cell">
+                        <Select
+                          aria-label="Proxy usage"
+                          title="Usage scope: all = model + auth"
+                          className="font-mono text-[11px]"
+                          value={proxy.usage || "all"}
+                          onChange={(e) => handleUsage(proxy.id, e.target.value)}
+                        >
+                          <option value="all">all</option>
+                          <option value="model">model</option>
+                          <option value="auth">auth</option>
+                        </Select>
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums hidden sm:table-cell">
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => handlePriority(proxy.id, Math.max(0, (proxy.priority || 0) - 1))}
+                            disabled={!proxy.priority}
+                            title="Lower priority"
+                            aria-label="Lower priority"
+                            className="grid h-5 w-5 place-items-center rounded text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:hover:bg-transparent"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span
+                            className={`min-w-[1.5rem] text-center text-[11px] ${proxy.priority ? "text-[var(--primary)] font-semibold" : "text-[var(--muted-foreground)]"}`}
+                            title={proxy.priority ? `Weight ${1 + proxy.priority}× vs priority 0` : "Default weight 1×"}
+                          >
+                            {proxy.priority || 0}
+                          </span>
+                          <button
+                            onClick={() => handlePriority(proxy.id, (proxy.priority || 0) + 1)}
+                            title="Raise priority"
+                            aria-label="Raise priority"
+                            className="grid h-5 w-5 place-items-center rounded text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 tabular-nums text-[var(--muted-foreground)] hidden lg:table-cell">
                         {proxy.lastUsedAt ? new Date(proxy.lastUsedAt).toLocaleString() : "—"}

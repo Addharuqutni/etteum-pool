@@ -45,6 +45,13 @@ function isAgentSystemPrompt(content: string): boolean {
   return AGENT_SYSTEM_PROMPT_PATTERNS.some((pattern) => pattern.test(content));
 }
 
+// ponytail: stored tokens sometimes carry trailing CR/LF from import; undici
+// rejects them as invalid header values, so strip them once here.
+function cleanAuthToken(raw: string | undefined): string | undefined {
+  const t = raw?.replace(/[\r\n]+/g, "").trim();
+  return t ? t : undefined;
+}
+
 interface CodeBuddyTokens {
   api_key?: string;
   access_token?: string;
@@ -64,33 +71,55 @@ interface CodeBuddyTokens {
 //      or code 11217 (authorization_pending)
 // The "X-No-*" headers bypass the auth middleware (no token yet).
 // ============================================================================
+// Single source of truth for the CodeBuddy global API host (Cartethyia parity:
+// GLOBAL_BASE_URL = "https://www.codebuddy.ai/v2"). Call sites append "/v2/...".
+export const CODEBUDDY_BASE_URL = "https://www.codebuddy.ai";
+
+export function resolveCodebuddyBaseUrl(): string {
+  return CODEBUDDY_BASE_URL;
+}
+
+// Host for X-Domain, derived from the base URL above.
+// Falls back to the public host when the base URL is not http(s).
+export function codebuddyDomain(baseUrl?: string): string {
+  try {
+    const host = new URL(baseUrl ?? resolveCodebuddyBaseUrl()).hostname;
+    return host || "www.codebuddy.ai";
+  } catch {
+    return "www.codebuddy.ai";
+  }
+}
+
 export const CODEBUDDY_OAUTH = {
-  baseUrl: "https://www.codebuddy.ai",
-  stateUrl: "https://www.codebuddy.ai/v2/plugin/auth/state",
-  tokenUrl: "https://www.codebuddy.ai/v2/plugin/auth/token",
-  refreshUrl: "https://www.codebuddy.ai/v2/plugin/auth/token/refresh",
-  userAgent: "CLI/2.108.1 CodeBuddy/2.108.1",
+  get baseUrl(): string { return resolveCodebuddyBaseUrl(); },
+  get stateUrl(): string { return `${resolveCodebuddyBaseUrl()}/v2/plugin/auth/state`; },
+  get tokenUrl(): string { return `${resolveCodebuddyBaseUrl()}/v2/plugin/auth/token`; },
+  get refreshUrl(): string { return `${resolveCodebuddyBaseUrl()}/v2/plugin/auth/token/refresh`; },
+  userAgent: "CLI/2.148.0 CodeBuddy/2.148.0",
   platform: "CLI",
   pollIntervalMs: 5000,
-} as const;
-
-const CODEBUDDY_OAUTH_NOAUTH_HEADERS: Record<string, string> = {
-  Accept: "application/json",
-  "User-Agent": CODEBUDDY_OAUTH.userAgent,
-  "X-Requested-With": "XMLHttpRequest",
-  "X-Domain": "www.codebuddy.ai",
-  "X-No-Authorization": "true",
-  "X-No-User-Id": "true",
-  "X-No-Enterprise-Id": "true",
-  "X-No-Department-Info": "true",
-  "X-Product": "SaaS",
 };
+
+function codebuddyNoAuthHeaders(): Record<string, string> {
+  return {
+    Accept: "application/json",
+    "User-Agent": CODEBUDDY_OAUTH.userAgent,
+    "X-Requested-With": "XMLHttpRequest",
+    "X-Domain": codebuddyDomain(),
+    "X-No-Authorization": "true",
+    "X-No-User-Id": "true",
+    "X-No-Enterprise-Id": "true",
+    "X-No-Department-Info": "true",
+    "X-Product": "SaaS",
+  };
+}
+
 
 export async function requestCodebuddyDeviceCode(): Promise<{ state: string; authUrl: string }> {
   const url = `${CODEBUDDY_OAUTH.stateUrl}?platform=${CODEBUDDY_OAUTH.platform}`;
   const response = await fetch(url, {
     method: "POST",
-    headers: { ...CODEBUDDY_OAUTH_NOAUTH_HEADERS, "Content-Type": "application/json" },
+    headers: { ...codebuddyNoAuthHeaders(), "Content-Type": "application/json" },
     body: "{}",
   });
   if (!response.ok) {
@@ -115,7 +144,7 @@ export interface CodebuddyPollResult {
 
 export async function pollCodebuddyToken(state: string): Promise<CodebuddyPollResult> {
   const url = `${CODEBUDDY_OAUTH.tokenUrl}?state=${encodeURIComponent(state)}&platform=${CODEBUDDY_OAUTH.platform}`;
-  const response = await fetch(url, { method: "GET", headers: CODEBUDDY_OAUTH_NOAUTH_HEADERS });
+  const response = await fetch(url, { method: "GET", headers: codebuddyNoAuthHeaders() });
   if (!response.ok) {
     return { status: "error", error: `Token poll failed (${response.status})` };
   }
@@ -161,7 +190,7 @@ export async function refreshCodebuddyToken(refreshToken: string): Promise<{
       "Accept": "application/json",
       "User-Agent": CODEBUDDY_OAUTH.userAgent,
       "X-Requested-With": "XMLHttpRequest",
-      "X-Domain": "www.codebuddy.ai",
+      "X-Domain": codebuddyDomain(),
       "X-Refresh-Token": refreshToken,
       "X-Auth-Refresh-Source": "plugin",
       "X-Product": "SaaS",
@@ -190,37 +219,23 @@ export async function refreshCodebuddyToken(refreshToken: string): Promise<{
   };
 }
 
-/** Map cb- prefixed model IDs to the actual CodeBuddy API model names. */
+/** Map cb- prefixed model IDs to the actual CodeBuddy API model names.
+ * Live-verified 2026-09-14 (chat stream, system-first, max_tokens>=100):
+ * gpt-5.x need max_tokens>=100 or upstream 11133; removed everything 11102.
+ */
 const CB_MODEL_MAP: Record<string, string> = {
-  // Claude
+  // Claude (only live tier: opus-4.6, opus-4.7-1m, sonnet-4.6)
   "cb-opus-4.6": "claude-opus-4.6",
-  "cb-opus-4.7": "claude-opus-4.7",
   "cb-opus-4.7-1m": "claude-opus-4.7-1m",
-  "cb-opus-4.8": "claude-opus-4.8",
-  "cb-opus-4.8-1m": "claude-opus-4.8-1m",
   "cb-sonnet-4.6": "claude-sonnet-4.6",
-  "cb-haiku-4.5": "claude-haiku-4.5",
-  // GPT
-  "cb-gpt-5.1": "gpt-5.1",
-  "cb-gpt-5.1-codex": "gpt-5.1-codex",
-  "cb-gpt-5.1-codex-max": "gpt-5.1-codex-max",
-  "cb-gpt-5.1-codex-mini": "gpt-5.1-codex-mini",
-  "cb-gpt-5.2": "gpt-5.2",
-  "cb-gpt-5.2-codex": "gpt-5.2-codex",
+  // GPT (only live: 5.3-codex, 5.4, 5.5 — all need max_tokens>=100)
   "cb-gpt-5.3-codex": "gpt-5.3-codex",
   "cb-gpt-5.4": "gpt-5.4",
   "cb-gpt-5.5": "gpt-5.5",
-  "cb-gpt-5.5-xhigh": "gpt-5.5-xhigh",
-  // Gemini
-  "cb-gemini-2.5-flash": "gemini-2.5-flash",
-  "cb-gemini-2.5-pro": "gemini-2.5-pro",
-  "cb-gemini-3.0-flash": "gemini-3.0-flash",
-  "cb-gemini-3.1-flash-lite": "gemini-3.1-flash-lite",
+  // Gemini (live: 3.1-pro, 3.5-flash)
   "cb-gemini-3.1-pro": "gemini-3.1-pro",
   "cb-gemini-3.5-flash": "gemini-3.5-flash",
-  // DeepSeek
-  "cb-deepseek-v3-2": "deepseek-v3-2-volc",
-  // Kimi
+  // Kimi (live)
   "cb-kimi-k2.5": "kimi-k2.5",
 };
 
@@ -239,7 +254,7 @@ export class CodeBuddyProvider extends BaseProvider {
     return model.toLowerCase().startsWith("cb-");
   }
 
-  /** Resolve cb- prefixed model IDs to actual CodeBuddy API model names. */
+  private get baseUrl(): string { return resolveCodebuddyBaseUrl(); }
   private resolveModel(model: string): string {
     // Strip -thinking suffix first for lookup, re-apply after
     const isThinking = model.endsWith("-thinking");
@@ -248,7 +263,6 @@ export class CodeBuddyProvider extends BaseProvider {
     return isThinking ? `${resolved}-thinking` : resolved;
   }
 
-  private baseUrl = "https://www.codebuddy.ai";
 
   supportedModels: ModelInfo[] = [
     // Credit rates derived from confirmed data point:
@@ -258,41 +272,46 @@ export class CodeBuddyProvider extends BaseProvider {
     //   gemini-2.5-pro=$1.25/$10, gemini-flash=$0.30/$2.50, deepseek=$0.14/$0.28
     // 1 CodeBuddy credit ≈ $0.01 passthrough.
 
-    // All models exposed with cb- prefix only
-    { id: "cb-opus-4.8", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
-    { id: "cb-opus-4.8-1m", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
-    { id: "cb-opus-4.7", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
+    // All models exposed with cb- prefix only. Live-verified 2026-09-14
+    // (chat stream, system-first): only these answer 200; rest 11102/11133.
+    // NOTE: gpt-5.x need max_tokens>=100 or upstream answers 11133.
     { id: "cb-opus-4.7-1m", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
     { id: "cb-opus-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
     { id: "cb-sonnet-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
-    { id: "cb-haiku-4.5", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 200000, max_output: 8192, thinking: true, vision: true, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex-max", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.025 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.1-codex-mini", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.003 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.016 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.2-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.016 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.3-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.013 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.4", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.018 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.035 / 1000, creditSource: "estimated" },
-    { id: "cb-gpt-5.5-xhigh", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.045 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-2.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.003 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-2.5-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.012 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.0-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
-    { id: "cb-gemini-3.1-flash-lite", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
     { id: "cb-gemini-3.1-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
     { id: "cb-gemini-3.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
-    { id: "cb-deepseek-v3-2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
     { id: "cb-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
   ];
 
   private getTokens(account: Account): CodeBuddyTokens | null {
     if (!account.tokens) return null;
     try {
-      const t = typeof account.tokens === "string"
+      let t = typeof account.tokens === "string"
         ? JSON.parse(account.tokens)
         : account.tokens;
-      return t as CodeBuddyTokens;
+      t = { ...t } as CodeBuddyTokens;
+      // Some login flows persist access_token as a nested JSON string
+      // (e.g. {"access_token":"<jwt>","refresh_token":"<jwt>","uid":"..."}).
+      // Sending that verbatim yields `Authorization: Bearer {json}` → 401/403
+      // from CodeBuddy billing even though the JWT itself is valid. Unwrap.
+      let nested = t.access_token;
+      for (let depth = 0; depth < 3 && typeof nested === "string" && /^[{[]/.test(nested.trim()); depth++) {
+        try {
+          const parsed = JSON.parse(nested);
+          if (parsed && typeof parsed === "object") {
+            nested = parsed.access_token ?? parsed.token;
+            if (!t.refresh_token && typeof parsed.refresh_token === "string") t.refresh_token = parsed.refresh_token;
+            if (!t.api_key && typeof parsed.api_key === "string") t.api_key = parsed.api_key;
+          }
+        } catch {
+          break;
+        }
+      }
+      if (typeof nested === "string" && !nested.startsWith("{")) t.access_token = nested;
+      return t;
     } catch {
       return null;
     }
@@ -686,7 +705,7 @@ export class CodeBuddyProvider extends BaseProvider {
    * Returns: "ok" | "quota_exhausted" | "expired"
    */
   private async validateApiKey(tokens: CodeBuddyTokens): Promise<"ok" | "quota_exhausted" | "expired"> {
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = cleanAuthToken(tokens.api_key || tokens.access_token || tokens.session_token);
     if (!apiKey) return "expired";
 
     // Primary: use billing API to validate — doesn't consume credits and gives definitive auth status
@@ -705,7 +724,9 @@ export class CodeBuddyProvider extends BaseProvider {
       // Network error on billing — fall through to chat endpoint check
     }
 
-    // Fallback: use chat completions endpoint (abort immediately after status)
+    // Fallback: use chat completions endpoint (abort immediately after status).
+    // Body must be system-first: upstream answers 400 code 11128
+    // ("first message is not system prompt") for user-first bodies (probed 2026-09-13).
     const controller = new AbortController();
     try {
       const response = await fetch(`${this.baseUrl}/v2/chat/completions`, {
@@ -715,11 +736,16 @@ export class CodeBuddyProvider extends BaseProvider {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${apiKey}`,
           "X-Requested-With": "XMLHttpRequest",
+          "X-Domain": codebuddyDomain(),
+          "X-Product": "SaaS",
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         },
         body: JSON.stringify({
           model: "gpt-5.5",
-          messages: [{ role: "user", content: "hi" }],
+          messages: [
+            { role: "system", content: "You are CodeBuddy Code." },
+            { role: "user", content: "hi" },
+          ],
           max_tokens: 100,
           stream: true,
         }),
@@ -751,7 +777,7 @@ export class CodeBuddyProvider extends BaseProvider {
     };
     if (json) headers["Content-Type"] = "application/json";
 
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = cleanAuthToken(tokens.api_key || tokens.access_token || tokens.session_token);
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     if (tokens.web_cookie) headers.Cookie = tokens.web_cookie;
     else if (tokens.cookies) headers.Cookie = tokens.cookies;
@@ -768,7 +794,7 @@ export class CodeBuddyProvider extends BaseProvider {
 
     // Use /v2/billing/meter/get-user-resource which works with API key (Bearer token).
     // The old /billing/meter/get-user-resource requires web session cookies that expire.
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = cleanAuthToken(tokens.api_key || tokens.access_token || tokens.session_token);
     const headers: Record<string, string> = {
       "Accept": "application/json, text/plain, */*",
       "Content-Type": "application/json",
@@ -828,16 +854,17 @@ export class CodeBuddyProvider extends BaseProvider {
       "X-Conversation-Request-ID": crypto.randomUUID().replace(/-/g, ""),
       "X-Conversation-Message-ID": crypto.randomUUID().replace(/-/g, ""),
       "X-Request-ID": crypto.randomUUID().replace(/-/g, ""),
-      "X-Domain": "www.codebuddy.ai",
+      "X-Domain": codebuddyDomain(),
       "X-Product": "SaaS",
       // Use browser-like User-Agent to avoid stricter content moderation for CLI/Agent traffic
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
 
-    const apiKey = tokens.api_key || tokens.access_token || tokens.session_token;
+    const apiKey = cleanAuthToken(tokens.api_key || tokens.access_token || tokens.session_token);
+    // Cartethyia parity: Bearer-only. Sending X-Api-Key alongside Authorization
+    // triggers upstream 401 {"message":"not_found"} (probed S8 2026-09-13).
     if (apiKey) {
       headers["Authorization"] = `Bearer ${apiKey}`;
-      headers["X-Api-Key"] = apiKey;
     }
 
     // Use cookies if available
@@ -988,11 +1015,15 @@ export class CodeBuddyProvider extends BaseProvider {
       // Fallback: keep message as-is
       cleanedMessages.push(msg);
     }
-
-    // CodeBuddy requires a system message — inject one if missing to avoid "Parse message failed"
-    const hasSystemMsg = cleanedMessages.some((m: any) => m.role === "system");
-    if (!hasSystemMsg) {
-      cleanedMessages.unshift({ role: "system", content: "You are a helpful AI assistant." });
+    // Upstream rejects stream calls whose first message is not system
+    // (code 11128 "first message is not system prompt", probed S1-S4 2026-09-13).
+    // Always force a system message first — matches Cartethyia globalModels contract.
+    const systemIdx = cleanedMessages.findIndex((m: any) => m.role === "system");
+    if (systemIdx > 0) {
+      const [sys] = cleanedMessages.splice(systemIdx, 1);
+      cleanedMessages.unshift(sys);
+    } else if (systemIdx < 0) {
+      cleanedMessages.unshift({ role: "system", content: "You are CodeBuddy Code." });
     }
 
     const body: Record<string, unknown> = {
@@ -1000,11 +1031,14 @@ export class CodeBuddyProvider extends BaseProvider {
       model: actualModel,
       stream,
     };
+    if (stream) body.stream_options = { include_usage: true };
 
     // Only add max_tokens if explicitly provided and reasonable
     if (request.max_tokens && request.max_tokens > 0) {
       body.max_tokens = Math.min(request.max_tokens, 32000);
     }
+    if (request.temperature !== undefined) body.temperature = request.temperature;
+    if (request.top_p !== undefined) body.top_p = request.top_p;
 
     // Normalize and forward tools if provided
     if (request.tools && request.tools.length > 0) {
@@ -1174,27 +1208,47 @@ export class CodeBuddyProvider extends BaseProvider {
     let capturedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
     let capturedRealCredit: number | null = null; // Real credit from CodeBuddy usage.credit
 
-    const STREAM_READ_TIMEOUT = 300_000; // 5 minutes per read — generous for thinking models
+    const STREAM_READ_TIMEOUT = 300_000; // 5 minutes for the whole stream — generous for thinking models
+
+    // Hoisted to the outer scope so both start() and cancel() can reach it.
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const reader = response.body?.getReader();
+        reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
         if (!reader) { controller.close(); return; }
 
         const decoder = new TextDecoder();
         let buffer = "";
         let contentModerationDetected = false;
         let hasToolCalls = false;
+        let timedOut = false;
+
+        // ONE idle watchdog for the stream, re-armed after every successful read —
+        // NOT a per-read Promise.race. A per-iteration `Promise.race([read(),
+        // timeout])` + clearTimeout leaves a never-settling pending Promise every
+        // loop pass; when the stream is wrapped (peekStreamForError + usage
+        // finalizer) and the upstream errors or the client disconnects, that pattern
+        // deadlocks/hangs Bun on Windows and can kill the etteum process. A single
+        // re-armed timer aborts the read cleanly and still means "idle for
+        // STREAM_READ_TIMEOUT" (e.g. a healthy cb-* stream that keeps producing
+        // tokens past 5 minutes is never cut off, only a genuinely stalled one is).
+        let watchdog = setTimeout(abortOnStall, STREAM_READ_TIMEOUT);
+        const rearm = () => {
+          clearTimeout(watchdog);
+          watchdog = setTimeout(abortOnStall, STREAM_READ_TIMEOUT);
+        };
+
+        function abortOnStall() {
+          timedOut = true;
+          try { void reader?.cancel(new Error("Stream read timeout"))?.catch(() => {}); } catch { /* already closed */ }
+        }
 
         try {
           while (true) {
-            // Race each read against a timeout to detect stalled streams
-            const readPromise = reader.read();
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error("Stream read timeout")), STREAM_READ_TIMEOUT);
-            });
-            const { done, value } = await Promise.race([readPromise, timeoutPromise]);
+            const { done, value } = await reader.read();
             if (done) break;
+            rearm();
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split("\n");
@@ -1288,6 +1342,13 @@ export class CodeBuddyProvider extends BaseProvider {
           }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
+          // Watchdog fired: the upstream stalled with no bytes for the whole
+          // STREAM_READ_TIMEOUT — surface a clean stream error and stop, instead
+          // of appending a bogus content delta to a host that already hung.
+          if (timedOut) {
+            try { controller.error(new Error(errMsg)); } catch { /* already closed */ }
+            return;
+          }
           console.error("[CodeBuddy] Stream error:", errMsg);
           // Send an error chunk to the client so it knows what happened
           try {
@@ -1306,8 +1367,16 @@ export class CodeBuddyProvider extends BaseProvider {
             // Controller may already be closed
           }
         } finally {
+          clearTimeout(watchdog);
           try { controller.close(); } catch { /* already closed */ }
         }
+      },
+      // Abort the upstream reader when the consumer (client, or the peek/usage
+      // finalizer wrapper) cancels this stream. Without this, response.body keeps
+      // being read in the background while the producer loop dangles after a
+      // disconnect/error — leaking the reader and hanging the Bun event loop.
+      async cancel(reason) {
+        try { await reader?.cancel(reason); } catch { /* already closed */ }
       },
     });
 

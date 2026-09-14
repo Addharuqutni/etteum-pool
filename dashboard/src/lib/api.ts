@@ -55,7 +55,11 @@ export async function fetchApi<T = any>(path: string, options?: FetchApiOptions)
   const { timeoutMs = 30_000, signal, ...fetchOptions } = options || {};
   const controller = new AbortController();
   const abortOnSignal = () => controller.abort(signal?.reason);
-  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  // Abort with a reason so a client timeout rejects with a clear TimeoutError
+  // instead of the browser's cryptic "signal is aborted without reason".
+  const timer = timeoutMs > 0
+    ? setTimeout(() => controller.abort(new DOMException(`Request timed out after ${timeoutMs}ms`, "TimeoutError")), timeoutMs)
+    : null;
 
   if (signal) {
     if (signal.aborted) controller.abort(signal.reason);
@@ -567,19 +571,98 @@ export async function testApiKey(key: string) {
   });
 }
 
+// ---- Multi-key lifecycle (Cartethyia full lifecycle) ----------------------
+
+export interface ApiKeyDTO {
+  id: number;
+  name: string;
+  description: string | null;
+  keyPrefix: string;
+  enabled: boolean;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  monthlyTokenBudget: number;
+  oneTimeTokenBudget: number;
+  rpmLimit: number;
+  maxConcurrent: number;
+  allowedProviders: string[];
+  deniedProviders: string[];
+  allowedModels: string[];
+  deniedModels: string[];
+  shareEnabled: boolean;
+  shareSlug: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface ApiKeyCreatePayload {
+  name: string;
+  description?: string;
+  monthlyTokenBudget?: number;
+  oneTimeTokenBudget?: number;
+  rpmLimit?: number;
+  maxConcurrent?: number;
+  allowedProviders?: string[];
+  deniedProviders?: string[];
+  allowedModels?: string[];
+  deniedModels?: string[];
+  expiresAt?: string | null;
+}
+
+export async function fetchApiKeys(): Promise<{ keys: ApiKeyDTO[]; legacy: { activeKey: string; source: string; fromEnv: boolean; configured: boolean } }> {
+  return fetchApi("/api/keys");
+}
+
+export async function createApiKey(payload: ApiKeyCreatePayload): Promise<ApiKeyDTO & { key: string }> {
+  return fetchApi("/api/keys", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export async function updateApiKey(id: number, patch: Partial<ApiKeyCreatePayload>): Promise<ApiKeyDTO> {
+  return fetchApi(`/api/keys/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export async function setApiKeyEnabled(id: number, enabled: boolean): Promise<void> {
+  return fetchApi(`/api/keys/${id}/${enabled ? "enable" : "disable"}`, { method: "POST" });
+}
+
+export async function revokeApiKey(id: number): Promise<void> {
+  return fetchApi(`/api/keys/${id}`, { method: "DELETE" });
+}
+
+export async function deleteApiKeyPermanent(id: number): Promise<void> {
+  return fetchApi(`/api/keys/${id}/permanent`, { method: "DELETE" });
+}
+
+export async function regenerateApiKeyById(id: number): Promise<ApiKeyDTO & { key: string }> {
+  return fetchApi(`/api/keys/${id}/regenerate`, { method: "POST" });
+}
+
+export async function revealApiKeySecret(id: number): Promise<{ key: string }> {
+  return fetchApi(`/api/keys/${id}/credential`);
+}
+
+export async function enableShare(id: number): Promise<{ shareUrl: string }> {
+  return fetchApi(`/api/keys/${id}/share`, { method: "POST" });
+}
+
+export async function disableShare(id: number): Promise<void> {
+  return fetchApi(`/api/keys/${id}/share`, { method: "DELETE" });
+}
+
 // Proxy Pool
 export async function fetchProxyPool() {
   return fetchApi("/api/proxy-pool/pool");
 }
 
-export async function addProxies(proxies: string[]) {
+export async function addProxies(proxies: string[], priority?: number) {
   return fetchApi("/api/proxy-pool/pool", {
     method: "POST",
-    body: JSON.stringify({ proxies }),
+    body: JSON.stringify({ proxies, ...(priority !== undefined ? { priority } : {}) }),
   });
 }
 
-export async function updateProxy(id: number, data: { status?: string; label?: string }) {
+export async function updateProxy(id: number, data: { status?: string; label?: string; priority?: number; usage?: string }) {
   return fetchApi(`/api/proxy-pool/pool/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
@@ -599,7 +682,7 @@ export async function checkProxy(id: number) {
 }
 
 export async function checkAllProxies() {
-  return fetchApi("/api/proxy-pool/pool/check-all", { method: "POST" });
+  return fetchApi("/api/proxy-pool/pool/check-all", { method: "POST", timeoutMs: 120_000 });
 }
 
 export interface ProxyCountry {
@@ -611,15 +694,24 @@ export async function fetchProxyCountries(): Promise<{ countries: ProxyCountry[]
   return fetchApi("/api/proxy-pool/scrape/countries");
 }
 
+export interface ScrapeSourceResult {
+  id: string;
+  label: string;
+  status: "fulfilled" | "empty" | "failed";
+  count: number;
+  error?: string;
+}
+
 export interface ScrapeProxyResult {
   scraped: number;
   verified: number;
   added: number;
   skipped: number;
+  sources?: ScrapeSourceResult[];
 }
 
 export async function scrapeProxies(options: {
-  source?: "proxyscrape" | "geonode" | "proxifly" | "all";
+  source?: "proxyscrape" | "geonode" | "proxifly" | "thespeedx" | "jetkai" | "iplocate" | "vpslab" | "hproxy" | "all";
   country?: string;
   protocol?: "http" | "socks5" | "all";
   limit?: number;
@@ -1076,3 +1168,94 @@ export async function fetchByokModels(data: {
     body: JSON.stringify(data),
   });
 }
+
+// ============================================================================
+// Antigravity (Google Cloud Code Assist) OAuth Functions
+// ============================================================================
+
+export interface AntigravityAuthorizeResponse {
+  authUrl: string;
+  state: string;
+}
+
+export interface AntigravityOAuthStatusResponse {
+  success: boolean;
+  connection?: {
+    email: string;
+    projectId: string;
+    name?: string;
+  };
+  error?: string;
+  status?: "waiting_authorization" | "exchanging" | "done" | "error" | "cancelled" | "expired";
+}
+
+export async function getAntigravityAuthorize(redirectUri: string): Promise<AntigravityAuthorizeResponse> {
+  const res = await fetch(`${API_BASE}/api/oauth/antigravity/authorize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ redirectUri }),
+  });
+
+  if (!res.ok) throw new Error(`Failed to authorize: ${await res.text()}`);
+
+  return res.json();
+}
+
+export async function startAntigravityOAuthProxy(): Promise<AntigravityAuthorizeResponse> {
+  const redirectUri = `${window.location.origin}/oauth/antigravity/callback`;
+  return getAntigravityAuthorize(redirectUri);
+}
+
+export async function pollAntigravityOAuthStatus(state: string): Promise<AntigravityOAuthStatusResponse> {
+  const res = await fetch(`${API_BASE}/api/oauth/antigravity/status?state=${encodeURIComponent(state)}`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+
+  if (!res.ok) throw new Error(`Polling failed: ${await res.text()}`);
+
+  return res.json();
+}
+
+export async function stopAntigravityOAuth(state?: string): Promise<void> {
+  if (!state) return;
+  
+  await fetch(`${API_BASE}/api/oauth/antigravity/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+}
+
+export interface CompleteAntigravityOAuthInput {
+  code: string;
+  state: string;
+}
+
+export async function completeAntigravityOAuth(input: CompleteAntigravityOAuthInput): Promise<{
+  success: boolean;
+  connection?: AntigravityOAuthStatusResponse["connection"];
+  error?: string;
+}> {
+  // Provisioning can exceed the 30s default fetchApi timeout (Google token
+  // exchange + Cloud Code Assist project discovery/onboarding). Disable the
+  // client deadline; the server completion is bounded internally by safeFetch.
+  return fetchApi(`/api/oauth/antigravity/complete`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    timeoutMs: 0,
+  });
+}
+
+export async function completeAntigravityOAuthCallbackUrl(callbackUrl: string): Promise<{
+  success: boolean;
+  connection?: AntigravityOAuthStatusResponse["connection"];
+  error?: string;
+}> {
+  return fetchApi(`/api/oauth/antigravity/callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callbackUrl }),
+  });
+}
+

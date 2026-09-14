@@ -35,6 +35,7 @@ _.log
 .etteum.pid
 .aiproxy.log
 .aiproxy.pid
+.etteum.*
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # dotenv environment variable files
@@ -43,9 +44,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .env.test.local
 .env.production.local
 .env.local
-
-# Claude Code local project overrides
-.claude/settings.local.json
 
 # caches
 .eslintcache
@@ -74,8 +72,8 @@ drizzle/
 # Debug artifacts
 *.png
 
-# Claude plans (local only)
-.claude/plans/
+# AI Agents
+CLAUDE.md
 
 
 # Playwright MCP runtime
@@ -93,3 +91,7 @@ test-compat.out
 /test-*.sh
 /test-*.mjs
 /test-*.js
+
+# Server / tsc output artifacts
+srv_*.txt
+tsc_out.txt

@@ -6,6 +6,7 @@ import { broadcast } from "../ws/index";
 import { config } from "../config";
 import { getProviderForModel, type ProviderName } from "./providers/registry";
 import { notifyAccountStatus } from "../services/alerts";
+import { cooldowns } from "./cooldown";
 
 export type { ProviderName };
 
@@ -97,8 +98,9 @@ class AccountPool {
    * Get the next available account for a provider using configured method.
    */
   async getNextAccount(provider: ProviderName, excludeAccountIds: Set<number> = new Set()): Promise<Account | null> {
+    const cooldownIds = this.getCooldownAccountIds();
     const activeAccounts = (await this.getActiveAccounts(provider))
-      .filter((account) => !excludeAccountIds.has(account.id));
+      .filter((account) => !excludeAccountIds.has(account.id) && !cooldownIds.has(account.id));
 
     if (activeAccounts.length === 0) {
       try {
@@ -253,8 +255,10 @@ class AccountPool {
       const { getByokProvider } = await import("./providers/registry");
       const byokProvider = getByokProvider();
       const prefix = byokProvider.findPrefixForModel(model);
+      const byokExclusions = new Set<number>(options.excludeAccountIds || []);
+      for (const id of this.getCooldownAccountIds()) byokExclusions.add(id);
       const account = await byokProvider.findAccountForModel(model, {
-        excludeAccountIds: options.excludeAccountIds,
+        excludeAccountIds: byokExclusions,
         loadBalancingMethod: prefix ? await this.getByokLoadBalancingMethod(prefix) : await this.getLoadBalancingMethod("byok"),
         getInFlightCount: (accountId) => this.getInFlightCount(accountId),
       });
@@ -376,6 +380,38 @@ class AccountPool {
     } catch (err) {
       console.error(`[Pool] Failed to mark transient failure on account ${accountId} (${errorMessage}):`, err);
     }
+  }
+
+  /**
+   * Record a 429 rate-limit strike for an account (graduated backoff,
+   * in-memory only — see cooldown.ts).
+   */
+  markRateLimited(accountId: number): void {
+    cooldowns.mark(accountId);
+  }
+
+  /**
+   * Clear an account's rate-limit cooldown (called on success).
+   */
+  clearRateLimitCooldown(accountId: number): void {
+    cooldowns.clear(accountId);
+  }
+
+  /**
+   * IDs of accounts currently in a 429 cooldown window.
+   */
+  getCooldownAccountIds(): Set<number> {
+    return new Set(cooldowns.activeIds());
+  }
+
+  /**
+   * Resolve a sticky account by provider + account id. Returns null when the
+   * account is no longer active or is currently in a 429 cooldown.
+   */
+  async getStickyAccount(provider: ProviderName, accountId: number): Promise<Account | null> {
+    if (cooldowns.isCooldown(accountId)) return null;
+    const active = await this.getActiveAccounts(provider);
+    return active.find((a) => a.id === accountId) || null;
   }
 
   /**

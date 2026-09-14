@@ -158,9 +158,11 @@ export const filterRules = sqliteTable("filter_rules", {
 export const proxyPool = sqliteTable("proxy_pool", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   url: text("url").notNull(),
-  type: text("type").notNull().default("http"), // http | socks5
+  type: text("type").notNull().default("http"), // http | https | socks4 | socks4a | socks5 | socks5h
   label: text("label"),
   status: text("status").notNull().default("active"), // active | disabled | error
+  usage: text("usage").notNull().default("all"), // all | model | auth — per-proxy scope
+  priority: integer("priority").notNull().default(0), // higher = preferred by selection
   lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
   lastCheckedAt: integer("last_checked_at", { mode: "timestamp" }),
   errorMessage: text("error_message"),
@@ -176,6 +178,54 @@ export const proxyPool = sqliteTable("proxy_pool", {
 // Model mappings for CLI integration (e.g. Claude Code). Incoming model ids are
 // rewritten at the proxy edge to a target model available in the pool. Example:
 // source "haiku" (match_type=contains) -> target "qwen-3.7".
+export const apiKeys = sqliteTable("api_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(), // human label
+  description: text("description"),
+  // Secret is stored hashed (lookup, never returned) + encrypted (reveal via
+  // explicit credential endpoint only). List/detail responses expose keyPrefix only.
+  keyHash: text("key_hash").notNull().unique(),
+  keyEnc: text("key_enc").notNull().default(""), // XOR-encrypted raw secret
+  keyPrefix: text("key_prefix").notNull(), // e.g. sk-pool-a1B2c3 — shown in list
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+  expiresAt: integer("expires_at", { mode: "timestamp" }), // optional end-of-life
+  // Token budgets: 0 = unlimited. monthly = rolling calendar month; oneTime = key lifetime.
+  monthlyTokenBudget: integer("monthly_token_budget").notNull().default(0),
+  oneTimeTokenBudget: integer("one_time_token_budget").notNull().default(0),
+  // Limits: 0 = unlimited.
+  rpmLimit: integer("rpm_limit").notNull().default(0),
+  maxConcurrent: integer("max_concurrent").notNull().default(0),
+  // ACL: provider/model allow + deny lists. JSON text arrays.
+  allowedProviders: text("allowed_providers", { mode: "json" }).$type<string[]>().notNull().default([]),
+  deniedProviders: text("denied_providers", { mode: "json" }).$type<string[]>().notNull().default([]),
+  allowedModels: text("allowed_models", { mode: "json" }).$type<string[]>().notNull().default([]),
+  deniedModels: text("denied_models", { mode: "json" }).$type<string[]>().notNull().default([]),
+  // Public share page: no raw secret on it, only connection details + usage.
+  shareEnabled: integer("share_enabled", { mode: "boolean" }).notNull().default(false),
+  shareSlug: text("share_slug").unique(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+}, (table) => [
+  uniqueIndex("api_keys_key_hash_idx").on(table.keyHash),
+  uniqueIndex("api_keys_share_slug_idx").on(table.shareSlug),
+]);
+
+export const apiKeyUsage = sqliteTable("api_key_usage", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  apiKeyId: integer("api_key_id").notNull().references(() => apiKeys.id),
+  period: text("period").notNull(), // ISO month "2026-09" (monthly) or "once" (lifetime)
+  requestCount: integer("request_count").notNull().default(0),
+  promptTokens: integer("prompt_tokens").notNull().default(0),
+  completionTokens: integer("completion_tokens").notNull().default(0),
+  totalTokens: integer("total_tokens").notNull().default(0),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+}, (table) => [
+  uniqueIndex("api_key_usage_key_period_idx").on(table.apiKeyId, table.period),
+  index("api_key_usage_key_idx").on(table.apiKeyId),
+]);
+
 export const modelMappings = sqliteTable("model_mappings", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   sourcePattern: text("source_pattern").notNull(), // e.g. "haiku" / "claude-3-5-sonnet" / regex
@@ -227,3 +277,7 @@ export type ModelMapping = typeof modelMappings.$inferSelect;
 export type NewModelMapping = typeof modelMappings.$inferInsert;
 export type Combo = typeof combos.$inferSelect;
 export type NewCombo = typeof combos.$inferInsert;
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type NewApiKey = typeof apiKeys.$inferInsert;
+export type ApiKeyUsage = typeof apiKeyUsage.$inferSelect;
+export type NewApiKeyUsage = typeof apiKeyUsage.$inferInsert;

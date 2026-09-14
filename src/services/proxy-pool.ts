@@ -6,6 +6,8 @@ interface CachedProxy {
   id: number;
   url: string;
   type: string;
+  priority: number;
+  usage: string;
 }
 
 // ── Proxy list cache ────────────────────────────────────────────────
@@ -20,7 +22,7 @@ async function refreshCache(): Promise<CachedProxy[]> {
   }
 
   const rows = await db
-    .select({ id: proxyPool.id, url: proxyPool.url, type: proxyPool.type })
+    .select({ id: proxyPool.id, url: proxyPool.url, type: proxyPool.type, priority: proxyPool.priority, usage: proxyPool.usage })
     .from(proxyPool)
     .where(eq(proxyPool.status, "active"));
 
@@ -99,17 +101,44 @@ export async function getNextProxy(
   if (cfg.usage !== "all" && cfg.usage !== purpose) return null;
 
   const proxies = await refreshCache();
-  const filtered = type ? proxies.filter((p) => p.type === type) : proxies;
+  // ponytail: per-proxy scope ANDs with global scope — proxy serves purpose only if both allow it.
+  const filtered = proxies.filter(
+    (p) =>
+      (!type || p.type === type) &&
+      (!p.usage || p.usage === "all" || p.usage === purpose),
+  );
   if (filtered.length === 0) return null;
+
+  // Higher priority = more preference (weighted): a proxy with priority P has
+  // P+1 weighted slots, so a pool of [p10, p0, p0] picks the first ~10/13 of
+  // the time without ever starving the lower-priority ones.
+  const maxPriority = Math.max(0, ...filtered.map((p) => p.priority || 0));
+  const totalWeight = filtered.reduce((sum, p) => sum + 1 + (p.priority || 0), 0);
 
   let proxy: CachedProxy | undefined;
 
   if (cfg.rotation === "sequential") {
-    // Sequential: stick with current index, only advance on failure
-    if (sequentialIndex >= filtered.length) sequentialIndex = 0;
-    proxy = filtered[sequentialIndex];
+    // Sequential: stick with current index, only advance on failure.
+    // Priority ordering applies (higher first), then round-robin order.
+    const ordered = [...filtered].sort(
+      (a, b) => (b.priority || 0) - (a.priority || 0) || a.id - b.id
+    );
+    if (sequentialIndex >= ordered.length) sequentialIndex = 0;
+    proxy = ordered[sequentialIndex];
+  } else if (maxPriority > 0) {
+    // Weighted random: pick a weighted slot, then fall to the slot's holder.
+    let draw = Math.floor(Math.random() * totalWeight);
+    for (const candidate of filtered) {
+      const weight = 1 + (candidate.priority || 0);
+      if (draw < weight) {
+        proxy = candidate;
+        break;
+      }
+      draw -= weight;
+    }
+    if (!proxy) proxy = filtered[0]; // unreachable safety
   } else {
-    // Round-robin (default)
+    // Round-robin (default) — no priority set anywhere, keep cheap.
     const index = roundRobinIndex % filtered.length;
     roundRobinIndex = (roundRobinIndex + 1) % Number.MAX_SAFE_INTEGER;
     proxy = filtered[index];
@@ -159,9 +188,11 @@ export async function markProxyFail(id: number, error?: string) {
 // ── Health check ────────────────────────────────────────────────────
 export async function checkProxyHealth(proxyUrl: string): Promise<{ ok: boolean; latencyMs: number; error?: string; ip?: string }> {
   const start = Date.now();
+  // ponytail: NUL on win32, curl has no /dev/null there — else every healthy proxy flips to error on check-all.
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
   try {
     const proc = Bun.spawn(
-      ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}|%{remote_ip}", "--proxy", proxyUrl, "--max-time", "10", "https://httpbin.org/ip"],
+      ["curl", "-s", "-o", nullDevice, "-w", "%{http_code}|%{remote_ip}", "--proxy", proxyUrl, "--max-time", "10", "https://httpbin.org/ip"],
       { stdout: "pipe", stderr: "pipe" }
     );
     const stdout = await new Response(proc.stdout).text();
@@ -174,6 +205,9 @@ export async function checkProxyHealth(proxyUrl: string): Promise<{ ok: boolean;
     }
 
     const [statusCode, ip] = stdout.trim().split("|");
+    if (!statusCode) {
+      return { ok: false, latencyMs, error: "Empty curl output" };
+    }
     if (statusCode === "200") {
       return { ok: true, latencyMs, ip };
     }

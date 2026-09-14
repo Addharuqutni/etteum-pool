@@ -60,6 +60,12 @@ function parseCavemanLevel(v: string | null | undefined): CavemanLevel {
   return "lite";
 }
 
+function parsePonytailMode(v: string | null | undefined): PonytailMode {
+  const s = (v || "").trim().toLowerCase();
+  if (s === "lite" || s === "ultra") return s;
+  return "full";
+}
+
 function parseStringArray(v: string | null | undefined, dflt: string[]): string[] {
   if (v == null) return dflt;
   try {
@@ -121,6 +127,18 @@ async function loadFromDb(): Promise<CompressionConfig> {
     caveman: {
       enabled: parseBool(map.get("compression_caveman_enabled"), dflt.caveman.enabled),
       level: parseCavemanLevel(map.get("compression_caveman_level")),
+    },
+    ponytail: {
+      enabled: parseBool(map.get("compression_ponytail_enabled"), dflt.ponytail.enabled),
+      mode: parsePonytailMode(map.get("compression_ponytail_mode")),
+      providerOverrides: parseBoolMap(
+        map.get("compression_ponytail_overrides"),
+        dflt.ponytail.providerOverrides
+      ),
+      stripMarkersFromOutput: parseBool(
+        map.get("compression_ponytail_strip_markers"),
+        dflt.ponytail.stripMarkersFromOutput
+      ),
     },
     cacheMarkers: {
       enabled: parseBool(map.get("compression_cache_markers_enabled"), dflt.cacheMarkers.enabled),

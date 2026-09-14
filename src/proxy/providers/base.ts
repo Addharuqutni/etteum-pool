@@ -1,5 +1,7 @@
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import { getNextProxy, markProxySuccess, markProxyFail } from "../../services/proxy-pool";
+import { safeFetch } from "../../utils/ssrf";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -60,7 +62,7 @@ export interface StreamChunk {
 }
 
 export type CreditUnit = "token" | "request" | "image" | "credit";
-export type CreditSource = "upstream" | "quota_delta" | "estimated" | "fixed";
+export type CreditSource = "upstream" | "quota_delta" | "estimated" | "fixed" | "exempt";
 export type ProviderHealthKind =
   | "healthy"
   | "exhausted"
@@ -233,12 +235,6 @@ export abstract class BaseProvider {
   }
 
   /**
-   * Catch-all provider used when no provider's ownsModel() matches. Exactly one
-   * provider sets this true (kiro). Others must leave it false.
-   */
-  isFallback = false;
-
-  /**
    * Wire format this provider speaks natively. The edge uses this to avoid
    * needless Anthropic↔OpenAI round-trips (see proxy/index.ts). "openai" is the
    * canonical internal shape; Anthropic-native providers set "anthropic".
@@ -271,23 +267,16 @@ export abstract class BaseProvider {
   }
 
   protected async fetchWithTimeout(url: string, init: RequestInit, timeoutMs = config.providerRequestTimeoutMs): Promise<Response> {
-    const { getNextProxy, markProxySuccess, markProxyFail } = await import("../../services/proxy-pool");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // SSRF guard (DNS + redirect-hop re-check) lives inside safeFetch — no need
+    // to assert here separately; proxy URL (if any) is transport-only.
     const proxy = await getNextProxy("model");
     try {
-      const response = await fetch(url, {
-        ...init,
-        signal: controller.signal,
-        ...(proxy ? { proxy: proxy.url } : {}),
-      } as any);
+      const response = await safeFetch(url, { ...init, ...(proxy ? { proxy: proxy.url } : {}) } as any, { timeoutMs });
       if (proxy) void markProxySuccess(proxy.id);
       return response;
     } catch (err) {
       if (proxy) void markProxyFail(proxy.id, err instanceof Error ? err.message : String(err));
       throw err;
-    } finally {
-      clearTimeout(timer);
     }
   }
 }

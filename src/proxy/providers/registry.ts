@@ -7,6 +7,7 @@ import { CodexProvider } from "./codex";
 import { GrokCliProvider } from "./grok-cli";
 import { ByokProvider } from "./byok";
 import { ClaudeProvider } from "./claude";
+import { AntigravityProvider } from "./antigravity";
 
 /**
  * Single source of truth for the provider set.
@@ -27,26 +28,27 @@ const codex = new CodexProvider();
 const grokCli = new GrokCliProvider();
 const byok = new ByokProvider();
 const claude = new ClaudeProvider();
+const antigravity = new AntigravityProvider();
 
 // Priority order. canva/codex/grok-cli/claude have unique prefixes; codex is
 // listed before codebuddy so the literal "gpt-5-codex" resolves to codex while
 // codebuddy keeps its own "gpt-5*"/"gpt-5.x-codex" models. byok checks dynamic
 // prefixes from DB accounts. claude owns `cc-*` (the assistant OAuth); grok-cli
-// owns exact `grok-4.5*` ids from Grok Build catalog.
-const PROVIDER_ORDER = [canva, codex, grokCli, claude, byok, codebuddyChina, codebuddy];
+// owns exact `grok-4.5*` ids from Grok Build catalog. antigravity owns `ag-*` prefix.
+const PROVIDER_ORDER = [canva, codex, grokCli, claude, byok, antigravity, codebuddyChina, codebuddy];
 
 /** Canonical provider name union (mirrors config.providers). */
 export type ProviderName = (typeof config.providers)[number];
 
 /** Resolve which provider owns a model id, or null when none does. */
 export function getProviderForModel(model: string): ProviderName | null {
-  return PROVIDER_ORDER.find((p) => p.ownsModel(model))?.name ?? null;
+  return (PROVIDER_ORDER.find((p) => p.ownsModel(model))?.name ?? null) as ProviderName | null;
 }
 
 /** Provider instances keyed by name. */
 export const providers: Record<ProviderName, BaseProvider> = Object.fromEntries(
   PROVIDER_ORDER.map((p) => [p.name, p]),
-) as Record<ProviderName, BaseProvider>;
+) as unknown as Record<ProviderName, BaseProvider>;
 
 /** All models across every registered provider. */
 export function getAllModels(): ModelInfo[] {
@@ -56,9 +58,15 @@ export function getAllModels(): ModelInfo[] {
 /** Iterable list of provider instances (priority order). */
 export const providerList: readonly BaseProvider[] = PROVIDER_ORDER;
 
-/** Refresh BYOK models from database. */
+/** Force-refresh BYOK models from database (after BYOK CRUD). */
 export async function refreshByokModels(): Promise<void> {
   await byok.refreshModelsCache();
+}
+
+
+/** Refresh BYOK models from database only when stale (read paths). */
+export async function ensureByokModelsFresh(): Promise<void> {
+  await byok.ensureModelsCacheFresh();
 }
 
 /** Get BYOK provider instance. */

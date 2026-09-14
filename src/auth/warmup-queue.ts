@@ -117,19 +117,21 @@ class WarmupQueue {
   }
 
   async queueAll(options: WarmupAllOptions = {}): Promise<number> {
-    const providers = options.providers?.length
-      ? options.providers
-      : ["kiro", "kiro-pro", "codebuddy"];
     const statuses = options.statuses?.length
       ? options.statuses
       : options.includePending
         ? ["active", "exhausted", "error", "pending"]
         : ["active", "exhausted", "error"];
 
+    // With no explicit provider list, warm up every provider's accounts.
+    // An explicit list scopes the query to just those providers.
+    const conditions = [inArray(accounts.status, statuses)];
+    if (options.providers?.length) conditions.push(inArray(accounts.provider, options.providers));
+
     const rows = await db
       .select({ id: accounts.id })
       .from(accounts)
-      .where(and(inArray(accounts.provider, providers), inArray(accounts.status, statuses)));
+      .where(and(...conditions));
 
     const ids = rows.map((row) => row.id);
     await this.enqueueBulk(ids);

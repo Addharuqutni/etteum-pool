@@ -12,6 +12,63 @@ import { broadcast } from "../ws/index";
 
 export const authRouter = new Hono();
 
+// Per-IP login rate limiting — adaptive to free memory. Brute-forcing accounts
+// through /api/auth routes is throttled harder when heap pressure is high.
+const loginBuckets = new Map<string, { count: number; resetAt: number }>();
+const LOGIN_WINDOW_MS = 60_000;
+
+function loginRateLimit(ip: string): { allowed: boolean; retryAfterSec?: number } {
+  const now = Date.now();
+  let b = loginBuckets.get(ip);
+  if (!b || now > b.resetAt) {
+    b = { count: 0, resetAt: now + LOGIN_WINDOW_MS };
+    loginBuckets.set(ip, b);
+  }
+  b.count++;
+  const base = 20; // 20 login attempts / min / IP
+  let limit = base;
+  try {
+    const mem = process.memoryUsage();
+    const ratio = mem.heapUsed / (mem.heapTotal || 1);
+    if (ratio > 0.9) limit = 5;
+    else if (ratio > 0.8) limit = 8;
+    else if (ratio > 0.7) limit = 12;
+  } catch {
+    /* ignore */
+  }
+  if (b.count > limit) {
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((b.resetAt - now) / 1000)) };
+  }
+  return { allowed: true };
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, b] of loginBuckets) {
+    if (now > b.resetAt) loginBuckets.delete(ip);
+  }
+}, LOGIN_WINDOW_MS).unref();
+
+// Apply to all login-adjacent routes (login, bulk, paste, queue-clearing).
+authRouter.use("*", async (c, next) => {
+  if (!c.req.path.includes("/login")) {
+    await next();
+    return;
+  }
+  const ip = (c.env as any)?.ip as string | undefined;
+  if (ip) {
+    const rl = loginRateLimit(ip);
+    if (!rl.allowed) {
+      return c.json(
+        { error: "Too many login attempts — try again shortly" },
+        429,
+        { "Retry-After": String(rl.retryAfterSec) }
+      );
+    }
+  }
+  await next();
+});
+
 function clampNumber(value: string | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -105,7 +162,7 @@ authRouter.post("/login-bulk", async (c) => {
 
 /**
  * POST /api/auth/bulk-add - Bulk add accounts and queue login
- * Body: { accounts: [{ email, password }], providers?: ["kiro","codebuddy","canva"] }
+ * Body: { accounts: [{ email, password }], providers?: ["codebuddy","canva","codex"] }
  *
  * This creates DB entries for each email × provider combination,
  * then queues them all for login via the enowxai bot.
@@ -123,15 +180,15 @@ authRouter.post("/bulk-add", async (c) => {
     return c.json({ error: "accounts array is required" }, 400);
   }
 
-  const providers = body.providers || ["kiro", "kiro-pro", "codebuddy", "canva", "codex"];
+  const providers = body.providers || ["codebuddy", "canva", "codex"];
 
   // Validate providers
   const validProviders = providers.filter((p) =>
-    ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"].includes(p)
+    ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"].includes(p)
   );
 
   if (validProviders.length === 0) {
-    return c.json({ error: "At least one valid provider is required (kiro, kiro-pro, codebuddy, canva, codex, qoder, gitlab-duo)" }, 400);
+    return c.json({ error: "At least one valid provider is required (codebuddy, codebuddy-china, canva, codex, grok-cli, claude, byok, antigravity)" }, 400);
   }
 
   const items = body.accounts.map((a) => ({
@@ -171,8 +228,8 @@ authRouter.post("/import", async (c) => {
     return c.json({ error: "text field is required" }, 400);
   }
 
-  const providers = (body.providers || ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder"]).filter((p) =>
-    ["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"].includes(p)
+  const providers = (body.providers || ["codebuddy", "canva", "codex"]).filter((p) =>
+    ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"].includes(p)
   );
 
   const lines = body.text.trim().split("\n");

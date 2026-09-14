@@ -61,7 +61,7 @@ console.log(`║  Backend:   http://localhost:${port}    ║`);
 console.log(`║  Dashboard: http://localhost:${dashboardPort}    ║`);
 console.log(`╚══════════════════════════════════════╝\n`);
 
-// Start backend
+// Start backend — below normal priority (background task), low CPU impact
 const backend = Bun.spawn(["bun", "src/index.ts"], {
   cwd: root,
   stdout: "inherit",
@@ -73,7 +73,24 @@ const backend = Bun.spawn(["bun", "src/index.ts"], {
   },
 });
 
-// Start dashboard static server
+// Set below-normal priority for background processes via PowerShell
+const backendPriorityCmd = `Get-Process -Id ${backend.pid} | ForEach-Object { $_.PriorityClass = 'BelowNormal' }`;
+await Bun.spawn(["powershell", "-Command", backendPriorityCmd], {
+  cwd: root,
+  stdout: "ignore",
+  stderr: "ignore",
+});
+
+try {
+  const backendAffinityCmd = `$proc = Get-CimInstance Win32_Process -Filter "ProcessId=${backend.pid}"` + "; if($proc) { $null = $proc.SetAffinityMask(6) }";
+  await Bun.spawn(["powershell", "-Command", backendAffinityCmd], {
+    cwd: root,
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+} catch {}
+
+// Start dashboard static server — below normal priority (background task), low CPU impact
 const dashboard = Bun.spawn(["bun", "run", "scripts/serve-dashboard.ts"], {
   cwd: root,
   stdout: "inherit",
@@ -84,6 +101,22 @@ const dashboard = Bun.spawn(["bun", "run", "scripts/serve-dashboard.ts"], {
     NODE_ENV: "production",
   },
 });
+
+const priorityCmd = `Get-Process -Id ${dashboard.pid} | ForEach-Object { $_.PriorityClass = 'BelowNormal' }`;
+await Bun.spawn(["powershell", "-Command", priorityCmd], {
+  cwd: root,
+  stdout: "ignore",
+  stderr: "ignore",
+});
+
+try {
+  const affinityCmd = `$proc = Get-CimInstance Win32_Process -Filter "ProcessId=${dashboard.pid}"` + "; if($proc) { $null = $proc.SetAffinityMask(6) }";
+  await Bun.spawn(["powershell", "-Command", affinityCmd], {
+    cwd: root,
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+} catch {}
 
 let shuttingDown = false;
 

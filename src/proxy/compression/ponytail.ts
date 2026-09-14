@@ -160,7 +160,7 @@ export function scanPonytailMarkers(
   // We scan the ORIGINAL response for markers (read-only), then separately
   // build a stripped clone if requested. This avoids accidentally mutating
   // the caller's response object.
-  function scanText(text: string, location: string): void {
+  function scanText(text: string, location: PonytailMarkerHit["location"]): void {
     if (!text || typeof text !== "string") return;
     let match: RegExpExecArray | null;
     // Reset lastIndex (global regex reused).
@@ -174,10 +174,17 @@ export function scanPonytailMarkers(
     }
   }
 
-  function walkScan(node: any, path: string): void {
+  function walkScan(node: unknown, path: string): void {
     if (node == null) return;
     if (typeof node === "string") {
-      scanText(node, path);
+      const location: PonytailMarkerHit["location"] = /tool_calls/i.test(path)
+        ? "tool_calls"
+        : /tool_result/i.test(path)
+          ? "tool_result"
+          : /tool_input|arguments/i.test(path)
+            ? "tool_input"
+            : "content";
+      scanText(node, location);
       return;
     }
     if (Array.isArray(node)) {
@@ -187,7 +194,7 @@ export function scanPonytailMarkers(
       return;
     }
     if (typeof node === "object") {
-      for (const [k, v] of Object.entries(node)) {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
         if (v == null) continue;
         walkScan(v, `${path}.${k}`);
       }

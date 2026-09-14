@@ -41,10 +41,12 @@ import {
   pollCodebuddyOAuth,
   pollGrokCliOAuth,
   revealByokKey,
+  startAntigravityOAuthProxy,
   startClaudeOAuth,
   startCodebuddyDeviceCode,
   startCodexOAuthProxy,
   startGrokCliDeviceCode,
+  stopAntigravityOAuth,
   stopCodexOAuth,
   testByokProvider,
   updateByokProvider,
@@ -52,9 +54,11 @@ import {
   warmupAllAccounts,
   type AutoWarmupStatus,
   type ByokProvider,
+  pollAntigravityOAuthStatus,
+  completeAntigravityOAuth,
 } from "@/lib/api";
 
-type Provider = "codebuddy" | "codebuddy-china" | "canva" | "codex" | "grok-cli" | "claude";
+type Provider = "codebuddy" | "codebuddy-china" | "canva" | "codex" | "grok-cli" | "claude" | "antigravity";
 
 type ByokFormKey = {
   id?: number;
@@ -74,7 +78,7 @@ interface Account {
   quotaRemaining?: number;
 }
 
-const providers: Provider[] = ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude"];
+const providers: Provider[] = ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "antigravity"];
 
 /** Configured models first, then models discovered via /models (deduped). */
 function byokChipModels(provider: ByokProvider): string[] {
@@ -87,6 +91,7 @@ function labelProvider(provider: string) {
   if (provider === "codex") return "Codex";
   if (provider === "grok-cli") return "Grok CLI";
   if (provider === "claude") return "Claude";
+  if (provider === "antigravity") return "Antigravity";
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
@@ -139,6 +144,11 @@ export default function Accounts() {
   const [codebuddyAccessToken, setCodebuddyAccessToken] = useState("");
   const [codebuddyRefreshToken, setCodebuddyRefreshToken] = useState("");
   const [codebuddyTokenBusy, setCodebuddyTokenBusy] = useState(false);
+  /** Antigravity (Google Cloud Code Assist) OAuth state */
+  const [antigravityOauthBusy, setAntigravityOauthBusy] = useState(false);
+  const [antigravityOauthAuthUrl, setAntigravityOauthAuthUrl] = useState("");
+  const antigravityOauthStateRef = useRef<string | null>(null);
+  const antigravityOauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [loginPendingDialog, setLoginPendingDialog] = useState(false);
   const [loginPendingConcurrency, setLoginPendingConcurrency] = useState(2);
   const [byokProviders, setByokProviders] = useState<ByokProvider[]>([]);
@@ -168,6 +178,8 @@ export default function Accounts() {
   const codexOauthPopupRef = useRef<Window | null>(null);
   const codexOauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const codexOauthStateRef = useRef<string | null>(null);
+  /** Antigravity OAuth popup and polling refs */
+  const antigravityOauthPopupRef = useRef<Window | null>(null);
   const loadingRef = useRef(false);
 
   async function load() {
@@ -273,6 +285,12 @@ export default function Accounts() {
       stopCodexOAuth(codexOauthStateRef.current).catch(() => {});
     }
     codexOauthPopupRef.current?.close();
+    
+    if (antigravityOauthPollRef.current) clearInterval(antigravityOauthPollRef.current);
+    if (antigravityOauthStateRef.current) {
+      stopAntigravityOAuth(antigravityOauthStateRef.current).catch(() => {});
+    }
+    antigravityOauthPopupRef.current?.close();
   }, []);
 
   useEffect(() => {
@@ -381,7 +399,9 @@ export default function Accounts() {
     try {
       const res = await fetchApi<{ success: number; failed: number; errors?: string[] }>("/api/accounts/instant-login", {
         method: "POST",
-        body: JSON.stringify({ tokens, provider: addDialogProvider }),
+        // Codex-only route. addDialogProvider is always "codex" when this dialog
+        // opens (Instant Login tab is only rendered for codex), so provider is implicit.
+        body: JSON.stringify({ tokens }),
       });
       showSuccess(`Instant login: ${res.success} success, ${res.failed} failed`);
       setInstantTokens("");
@@ -712,6 +732,202 @@ export default function Accounts() {
     }
   }
 
+  // ============================================================================
+  // Antigravity OAuth handlers
+  // ============================================================================
+  // Antigravity OAuth flow (postMessage from popup - Cartethyia/9router pattern)
+  // ============================================================================
+  
+  async function completeAntigravityOAuthViaCallback(code: string) {
+    setAntigravityOauthBusy(true);
+    
+    try {
+      const result = await completeAntigravityOAuth({ code, state: antigravityOauthStateRef.current! });
+      
+      if (!result.success) {
+        throw new Error(result.error || "Authentication failed");
+      }
+      
+      showSuccess(`✅ Successfully authenticated as ${result.connection?.email || "Antigravity user"}`);
+      
+      // Close popup and refresh accounts
+      if (antigravityOauthPopupRef.current && !antigravityOauthPopupRef.current.closed) {
+        antigravityOauthPopupRef.current.close();
+      }
+      
+      resetAntigravityOAuthFlow();
+      load().then(() => handleAdd()); // Refresh accounts list
+      
+    } catch (err) {
+      console.error("[completeAntigravityOAuthViaCallback] Error:", err);
+      showError(err instanceof Error ? err.message : String(err));
+      resetAntigravityOAuthFlow();
+    }
+  }
+  
+  async function handleAntigravityOAuthLogin() {
+    if (antigravityOauthBusy || antigravityOauthAuthUrl) return;
+    setAntigravityOauthBusy(true);
+    setError(null);
+
+    try {
+      const auth = await startAntigravityOAuthProxy();
+      setAntigravityOauthAuthUrl(auth.authUrl);
+      antigravityOauthStateRef.current = auth.state;
+      
+      if (!auth.authUrl) {
+        showSuccess("GOOGLE_ANTIGRAVITY_CLIENT_ID not configured. Open URL manually in browser.");
+        beginAntigravityOAuthPolling();
+        return;
+      }
+      
+      // Open Google OAuth in popup window
+      const popup = window.open(
+        auth.authUrl, 
+        "antigravity_oauth_popup", 
+        "width=640,height=800,menubar=no,toolbar=no,location=yes,status=yes"
+      );
+      
+      if (!popup || popup.closed || typeof popup.closed === "undefined") {
+        showError("Popup blocked! Please allow popups for this site or use 'Prepare Manual' button instead.");
+        resetAntigravityOAuthFlow();
+        return;
+      }
+      
+      antigravityOauthPopupRef.current = popup;
+      
+      // Listen for postMessage from popup callback page
+      const messageHandler = (event: MessageEvent) => {
+        // Security: only accept messages from same origin (Dashboard)
+        if (event.origin !== window.location.origin) {
+          console.warn("[Antigravity] Rejected cross-origin message:", event.origin);
+          return;
+        }
+        
+        if (event.data?.type === "oauth_callback") {
+          const { code, state, error, errorDescription } = event.data.data;
+          
+          if (error) {
+            showError(`OAuth error: ${error} - ${errorDescription || "Unknown error"}`);
+            resetAntigravityOAuthFlow();
+            return;
+          }
+          
+          if (code && state) {
+            // Verify state matches
+            if (state !== antigravityOauthStateRef.current) {
+              showError("OAuth state mismatch - possible CSRF attack");
+              resetAntigravityOAuthFlow();
+              return;
+            }
+            
+            completeAntigravityOAuthViaCallback(code).catch((err) => {
+              showError(err instanceof Error ? err.message : String(err));
+            });
+          }
+        }
+      };
+      
+      window.addEventListener("message", messageHandler);
+      
+      // Set timeout to fallback to manual mode if popup is abandoned
+      setTimeout(() => {
+        window.removeEventListener("message", messageHandler);
+        if (popup && !popup.closed) {
+          showSuccess("If not completed, open the URL manually and use Prepare Manual approach.");
+        }
+      }, 120000); // 2 minute timeout
+      
+      showSuccess("Complete authentication in the popup window. It will auto-close when done.");
+      
+    } catch (err) {
+      console.error("[handleAntigravityOAuthLogin] Error:", err);
+      resetAntigravityOAuthFlow();
+      showError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function handleAntigravityOAuthManual() {
+    if (antigravityOauthBusy || antigravityOauthAuthUrl) return;
+    setAntigravityOauthBusy(true);
+    setError(null);
+
+    try {
+      const auth = await startAntigravityOAuthProxy();
+      setAntigravityOauthAuthUrl(auth.authUrl);
+      antigravityOauthStateRef.current = auth.state;
+      beginAntigravityOAuthPolling();
+      showSuccess("Auth URL ready. Open it manually, login, then wait for redirect to /oauth/antigravity/callback.");
+    } catch (err) {
+      resetAntigravityOAuthFlow();
+      showError(err);
+    }
+  }
+
+  function clearAntigravityPolling() {
+    if (antigravityOauthPollRef.current) {
+      clearInterval(antigravityOauthPollRef.current);
+      antigravityOauthPollRef.current = null;
+    }
+  }
+
+  function beginAntigravityOAuthPolling() {
+    if (!antigravityOauthAuthUrl) return;
+
+    clearAntigravityPolling();
+    
+    const checkStatus = async () => {
+      const state = antigravityOauthStateRef.current;
+      if (!state) {
+        clearAntigravityPolling();
+        return;
+      }
+
+      try {
+        const status = await pollAntigravityOAuthStatus(state);
+        
+        if (status.success && status.connection) {
+          finishAntigravityOAuthSuccess(status);
+        } else if (status.error) {
+          showError(status.error);
+          clearAntigravityPolling();
+        } else if (status.status === "cancelled") {
+          showError("Authentication cancelled by user");
+          clearAntigravityPolling();
+        }
+      } catch (err) {
+        console.error("[Antigravity OAuth] Poll error:", err);
+      }
+    };
+
+    // Check immediately, then every 3 seconds
+    checkStatus();
+    antigravityOauthPollRef.current = setInterval(checkStatus, 3000);
+  }
+
+  function resetAntigravityOAuthFlow() {
+    setAntigravityOauthBusy(false);
+    setAntigravityOauthAuthUrl("");
+    antigravityOauthStateRef.current = null;
+    clearAntigravityPolling();
+    if (antigravityOauthPopupRef.current) {
+      antigravityOauthPopupRef.current.close();
+      antigravityOauthPopupRef.current = null;
+    }
+  }
+
+  function finishAntigravityOAuthSuccess(status: any) {
+    resetAntigravityOAuthFlow();
+    
+    if (antigravityOauthPopupRef.current) {
+      antigravityOauthPopupRef.current.close();
+    }
+    
+    // Use the same pattern as Codex - just reload accounts list
+    showSuccess(`Antigravity connected: ${status.connection?.email || "account added"}`);
+    setAddDialogProvider(null);
+    load();
+  }
+
   async function handleCodexOAuthPrepareManual() {
     if (codexOauthBusy || hasPreparedCodexOAuth) return;
     setCodexOauthBusy(true);
@@ -941,6 +1157,9 @@ export default function Accounts() {
     if (provider === "codebuddy-china") {
       setAddMode("apikey");
     }
+    if (provider === "antigravity") {
+      setAddMode("oauth");
+    }
     setAddDialogProvider(provider);
   }
 
@@ -961,6 +1180,14 @@ export default function Accounts() {
     setCodebuddyAccessToken("");
     setCodebuddyRefreshToken("");
     resetCodebuddyOAuthFlow();
+    
+    // Cleanup Antigravity OAuth popup and polling
+    if (antigravityOauthPopupRef.current && !antigravityOauthPopupRef.current.closed) {
+      antigravityOauthPopupRef.current.close();
+    }
+    clearAntigravityPolling();
+    resetAntigravityOAuthFlow();
+    
     setAddDialogProvider(null);
   }
 
@@ -2139,7 +2366,7 @@ ck_xyz789ghi012..."
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                   Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris. Host <code>www.codebuddy.ai</code>.
-                  Model tersedia: <code>cb-opus-4.7-1m</code>, <code>cb-sonnet-4.6</code>, <code>cb-haiku-4.5</code>, dll.
+                  Model tersedia: <code>cb-opus-4.7-1m</code>, <code>cb-opus-4.6</code>, <code>cb-sonnet-4.6</code>, dll.
                 </p>
               </div>
               <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
@@ -2303,18 +2530,62 @@ ck_xyz789ghi012..."
             </div>
           )}
 
-          {/* Instant Login mode (Kiro Pro only) */}
+          {/* Antigravity OAuth mode */}
+          {addMode === "oauth" && addDialogProvider === "antigravity" && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                Login Antigravity via Google OAuth. Pilih popup (recommended) atau manual untuk generate auth URL terlebih dahulu.
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                <Button variant="outline" size="sm" onClick={handleAntigravityOAuthManual} disabled={antigravityOauthBusy || !!antigravityOauthAuthUrl}>
+                  {antigravityOauthAuthUrl ? "URL Ready" : antigravityOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Preparing...</>) : "Prepare Manual"}
+                </Button>
+                <Button size="sm" onClick={handleAntigravityOAuthLogin} disabled={antigravityOauthBusy || !!antigravityOauthAuthUrl}>
+                  {antigravityOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Waiting for OAuth...</>) : "Start OAuth Login"}
+                </Button>
+              </div>
+
+              {antigravityOauthAuthUrl && (
+                <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="eyebrow">Google Auth URL</label>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(antigravityOauthAuthUrl); showSuccess("Auth URL copied"); }}>Copy</Button>
+                        <Button size="sm" variant="outline" onClick={() => window.open(antigravityOauthAuthUrl, "_blank")}>Open</Button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={antigravityOauthAuthUrl}
+                      readOnly
+                      className="w-full h-20 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-xs font-mono text-[var(--foreground)] focus:outline-none resize-none"
+                    />
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      Buka URL ini di browser yang baru, login dengan akun Google Anda, dan izinkan akses ke Cloud Code Assist. Popup akan otomatis close setelah authentication selesai.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button size="sm" variant="outline" onClick={handleCloseAddDialog} disabled={antigravityOauthBusy && !antigravityOauthAuthUrl}>Cancel</Button>
+              </div>
+            </div>
+          )}
+
+          {/* Instant Login mode (Codex only) */}
           {addMode === "instant" && addDialogProvider === "codex" && (
             <div className="space-y-4">
               <div>
-                <label className="eyebrow">Refresh Tokens (satu per baris)</label>
+                <label className="eyebrow">Codex Refresh Tokens (satu per baris)</label>
                 <textarea
                   value={instantTokens}
                   onChange={(e) => setInstantTokens(e.target.value)}
                   className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
-                  placeholder={"eyJhbGciOiJSUzI1NiIs...\neyJhbGciOiJSUzI1NiIs...\neyJhbGciOiJSUzI1NiIs..."}
+                  placeholder={"eyJhbGciOiJSUzI1NiIs..."}
                 />
-                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Paste refresh token per baris. Email otomatis di-extract dari token.</p>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">Paste Codex refresh tokens (rt_*) per baris. Email otomatis di-extract dari token.</p>
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setAddDialogProvider(null)}>Cancel</Button>
@@ -2366,33 +2637,44 @@ ck_xyz789ghi012..."
           )}
 
           {/* Single mode (all providers) */}
-          {addMode === "single" && (
-            <div className="space-y-4">
-              <div>
-                <label className="eyebrow">Email</label>
-                <Input value={addForm.email} onChange={(e) => setAddForm({ ...addForm, email: e.target.value })} placeholder="email@example.com" className="mt-1" />
-              </div>
-              <div>
-                <label className="eyebrow">Password</label>
-                <Input value={addForm.password} onChange={(e) => setAddForm({ ...addForm, password: e.target.value })} type="password" placeholder="********" className="mt-1" />
-              </div>
-              <div>
-                <label className="eyebrow">Browser Engine</label>
-                <Select value={addForm.browserEngine} onChange={(e) => setAddForm({ ...addForm, browserEngine: e.target.value })} className="mt-1">
-                  <option value="camoufox">Camoufox (Anti-detect, default)</option>
-                  <option value="chromium">Chromium (Playwright)</option>
-                </Select>
-              </div>
-              <label className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
-                <input type="checkbox" checked={addForm.headless} onChange={(e) => setAddForm({ ...addForm, headless: e.target.checked })} className="h-4 w-4 rounded border-[var(--border)]" />
-                Run browser headless
-              </label>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setAddDialogProvider(null)}>Cancel</Button>
-                <Button onClick={handleAdd}>Add Account</Button>
-              </div>
-            </div>
-          )}
+           {addMode === "single" && (
+             <div className="space-y-4">
+               <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                 Login Antigravity via Google OAuth untuk mendapatkan akses token + project ID otomatis.<br/>
+                 Gunakan tombol “Start OAuth Login” di bawah ini untuk memulai flow authentication.
+               </div>
+
+               <Button size="sm" onClick={handleAntigravityOAuthLogin} disabled={antigravityOauthBusy || !!antigravityOauthAuthUrl}>
+                 {antigravityOauthBusy ? (<><Loader2 className="h-4 w-4 animate-spin" /> Waiting for OAuth...</>) : "Start OAuth Login"}
+               </Button>
+
+               {antigravityOauthAuthUrl && (
+                 <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
+                   <div className="space-y-2">
+                     <div className="flex items-center justify-between gap-2">
+                       <label className="eyebrow">Google Auth URL</label>
+                       <div className="flex gap-2">
+                         <Button size="sm" variant="outline" onClick={() => { navigator.clipboard.writeText(antigravityOauthAuthUrl); showSuccess("Auth URL copied"); }}>Copy</Button>
+                         <Button size="sm" variant="outline" onClick={() => window.open(antigravityOauthAuthUrl, "_blank")}>Open</Button>
+                       </div>
+                     </div>
+                     <textarea
+                       value={antigravityOauthAuthUrl}
+                       readOnly
+                       className="w-full h-20 rounded-md border border-[var(--border)] bg-[var(--background)] p-3 text-xs font-mono text-[var(--foreground)] focus:outline-none resize-none"
+                     />
+                     <p className="text-xs text-[var(--muted-foreground)]">
+                       Buka URL ini di browser yang baru, login dengan akun Google Anda, dan izinkan akses ke Cloud Code Assist. Popup akan otomatis close setelah authentication selesai.
+                     </p>
+                   </div>
+                 </div>
+               )}
+
+               <div className="flex justify-end gap-2 pt-1">
+                 <Button size="sm" variant="outline" onClick={() => setAddDialogProvider(null)} disabled={antigravityOauthBusy && !antigravityOauthAuthUrl}>Cancel</Button>
+               </div>
+             </div>
+           )}
         </DialogContent>
       </Dialog>
     </div>

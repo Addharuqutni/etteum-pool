@@ -60,7 +60,6 @@ interface ByokSelectionOptions {
 export class ByokProvider extends BaseProvider {
   name = "byok";
   override supportedModels: ModelInfo[] = [];
-  override isFallback = false;
   override nativeFormat: "openai" | "anthropic" = "openai";
 
   // Synchronous prefix → accounts cache (required for ownsModel sync check).
@@ -170,6 +169,11 @@ export class ByokProvider extends BaseProvider {
   async refreshModelsCache(): Promise<void> {
     this.cacheExpiry = 0;
     await this.refreshCache();
+  }
+
+  /** Refresh only when stale (called on read paths like /v1/models). */
+  async ensureModelsCacheFresh(): Promise<void> {
+    await this.ensureCache();
   }
 
   // ── Helpers ────────────────────────────────────────────────────────

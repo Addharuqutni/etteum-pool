@@ -34,7 +34,7 @@ export async function refreshCodebuddyChinaToken(refreshToken: string): Promise<
     headers: {
       "Content-Type": "application/json",
       "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "User-Agent": "CLI/2.148.0 CodeBuddy/2.148.0",
       "X-Requested-With": "XMLHttpRequest",
       "X-Domain": "www.codebuddy.cn",
       "X-Refresh-Token": refreshToken,
@@ -65,38 +65,44 @@ export async function refreshCodebuddyChinaToken(refreshToken: string): Promise<
   };
 }
 
-/** Map cbc- prefixed model IDs to actual CodeBuddy China API model names. */
+// Live-verified 2026-09-14 (chat stream, system-first): everything here answers
+// 200 on www.codebuddy.cn. Removed: cbc-haiku-4.5, cbc-kimi-k2.7-code,
+// cbc-glm-4.7 (never listed), cbc-glm-5.0 (all 11102 "service info not found").
 const CBC_MODEL_MAP: Record<string, string> = {
-  // Claude
-  "cbc-haiku-4.5": "claude-haiku-4.5",
   // DeepSeek
   "cbc-deepseek-r1": "deepseek-r1",
   "cbc-deepseek-v3": "deepseek-v3",
   "cbc-deepseek-v3-2-volc": "deepseek-v3-2-volc",
   "cbc-deepseek-v4-flash": "deepseek-v4-flash",
+  "cbc-deepseek-v4.1-flash": "deepseek-v4.1-flash",
   "cbc-deepseek-v4-pro": "deepseek-v4-pro",
   // Kimi (Moonshot)
   "cbc-kimi-k2.5": "kimi-k2.5",
   "cbc-kimi-k2.6": "kimi-k2.6",
   "cbc-kimi-k2.7": "kimi-k2.7",
-  "cbc-kimi-k2.7-code": "kimi-k2.7-code",
   "cbc-kimi-k3": "kimi-k3",
+  "cbc-kimi-k3-1": "kimi-k3-1",
   // GLM (Zhipu)
+  "cbc-glm-5.0-turbo": "glm-5.0-turbo",
   "cbc-glm-5.1": "glm-5.1",
   "cbc-glm-5.2": "glm-5.2",
+  "cbc-glm-5.3": "glm-5.3",
+  "cbc-glm-5.3-flash": "glm-5.3-flash",
   "cbc-glm-5v-turbo": "glm-5v-turbo",
   // MiniMax
   "cbc-minimax-m2.7": "minimax-m2.7",
   "cbc-minimax-m3": "minimax-m3",
   // Hunyuan (Tencent)
+  "cbc-hy3": "hy3",
   "cbc-hy3-preview": "hy3-preview",
+  "cbc-hy4-preview": "hy4-preview",
 };
 
 /**
- * CodeBuddy China Provider — codebuddy.cn region
+  * CodeBuddy China Provider — www.codebuddy.cn (CN) region
  *
  * Same API format as CodeBuddy global (codebuddy.ai) but:
- * - Base URL: https://www.codebuddy.cn
+  * - Base URL: https://www.codebuddy.cn
  * - Auth: Bearer API key (ck_* prefix)
  * - Streaming only (non-stream returns error 11101)
  * - China-specific models (GLM, Kimi, DeepSeek V4, Hunyuan, MiniMax)
@@ -125,33 +131,40 @@ export class CodeBuddyChinaProvider extends BaseProvider {
 
   private baseUrl = "https://www.codebuddy.cn";
 
+  // Live-verified 2026-09-14 (chat stream, system-first, max_tokens>=100 on
+  // www.codebuddy.cn): everything here answers 200. Specs (context/max_output)
+  // from 9router open-sse/providers/capabilities.js "codebuddy-cn" table
+  // (server product-config payload); models absent there keep prior values.
   supportedModels: ModelInfo[] = [
-    // Claude
-    { id: "cbc-haiku-4.5", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.11, creditSource: "upstream" },
-    // DeepSeek — r1 / v3 are text-only; v3-2-volc / v4-flash / v4-pro support vision
+    // DeepSeek — r1 / v3 text-only; v3-2-volc / v4-flash / v4.1-flash / v4-pro vision
     { id: "cbc-deepseek-r1", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 64000, max_output: 8192, thinking: true, vision: false, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
     { id: "cbc-deepseek-v3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 64000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
     { id: "cbc-deepseek-v3-2-volc", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 64000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
     { id: "cbc-deepseek-v4-flash", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
-    { id: "cbc-deepseek-v4-pro", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.03, creditSource: "upstream" },
-    // Kimi — k2.5 / k2.6 support vision; k2.7 is flaky (sometimes works with all-fields format)
+    { id: "cbc-deepseek-v4.1-flash", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
+    { id: "cbc-deepseek-v4-pro", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 50000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.03, creditSource: "upstream" },
+    // Kimi
     { id: "cbc-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 164000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.05, creditSource: "upstream" },
-    { id: "cbc-kimi-k2.6", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.09, creditSource: "upstream" },
-    { id: "cbc-kimi-k2.7", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
-    // ponytail: k2.7-code specs estimated from k2.7 (256k ctx, thinking on); vision disabled (code-focused variant). Upgrade path: verify upstream docs when CN publishes K2.7-Code page.
-    { id: "cbc-kimi-k2.7-code", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 8192, thinking: true, vision: false, creditUnit: "credit", creditRate: 0.06, creditSource: "estimated" },
+    { id: "cbc-kimi-k2.6", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 32000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.09, creditSource: "upstream" },
+    { id: "cbc-kimi-k2.7", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 32000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
     // K3: thinking always on; max_completion_tokens up to 1_048_576; vision = base64/ms:// only
     { id: "cbc-kimi-k3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 256000, max_output: 1048576, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
-    // GLM — 5.1 / 5.2 / 5v-turbo all support vision (5v-turbo is the dedicated vision model)
-    { id: "cbc-glm-5.1", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
-    { id: "cbc-glm-5.2", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
-    { id: "cbc-glm-5v-turbo", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.03, creditSource: "upstream" },
+    { id: "cbc-kimi-k3-1", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 32000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.07, creditSource: "upstream" },
+    // GLM
+    { id: "cbc-glm-5.0-turbo", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
+    { id: "cbc-glm-5.1", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 48000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
+    { id: "cbc-glm-5.2", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 48000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
+    { id: "cbc-glm-5.3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 48000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
+    { id: "cbc-glm-5.3-flash", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 32000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.02, creditSource: "upstream" },
+    { id: "cbc-glm-5v-turbo", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.03, creditSource: "upstream" },
     // MiniMax — vision support is flaky upstream (model often replies "I don't see"), kept enabled for parity
     // ponytail: m2.7 specs copied from m3, vision disabled (below M3 tier). Upgrade path: confirm against CN docs when MiniMax-M2.7 page ships.
     { id: "cbc-minimax-m2.7", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 512000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.05, creditSource: "estimated" },
-    { id: "cbc-minimax-m3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 512000, max_output: 8192, thinking: false, vision: true, creditUnit: "credit", creditRate: 0.10, creditSource: "upstream" },
-    // Hunyuan — model itself always replies "I can't see the image" even with payload accepted; vision disabled
+    { id: "cbc-minimax-m3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 512000, max_output: 128000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.10, creditSource: "upstream" },
+    // Hunyuan
+    { id: "cbc-hy3", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 192000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
     { id: "cbc-hy3-preview", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 192000, max_output: 8192, thinking: false, vision: false, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
+    { id: "cbc-hy4-preview", object: "model", created: Date.now(), owned_by: "codebuddy-china", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "credit", creditRate: 0.01, creditSource: "upstream" },
   ];
 
   /** Cache for resolved tool schemas — the assistant sends the same tools every request */
@@ -161,10 +174,29 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   private getTokens(account: Account): CodeBuddyChinaTokens | null {
     if (!account.tokens) return null;
     try {
-      const t = typeof account.tokens === "string"
+      let t = typeof account.tokens === "string"
         ? JSON.parse(account.tokens)
         : account.tokens;
-      return t as CodeBuddyChinaTokens;
+      t = { ...t } as CodeBuddyChinaTokens;
+      // Same double-encoding as global accounts: access_token persisted as a
+      // nested JSON string ({"access_token":"<jwt>",...}). Sending it verbatim
+      // yields `Bearer {json}` → false 401/403 from billing. Unwrap (parity
+      // with CodeBuddyProvider.getTokens; live-proven billing 200 on CN JWT).
+      let nested = t.access_token;
+      for (let depth = 0; depth < 3 && typeof nested === "string" && /^[{[]/.test(nested.trim()); depth++) {
+        try {
+          const parsed = JSON.parse(nested);
+          if (parsed && typeof parsed === "object") {
+            nested = parsed.access_token ?? parsed.token;
+            if (!t.refresh_token && typeof parsed.refresh_token === "string") t.refresh_token = parsed.refresh_token;
+            if (!t.api_key && typeof parsed.api_key === "string") t.api_key = parsed.api_key;
+          }
+        } catch {
+          break;
+        }
+      }
+      if (typeof nested === "string" && !nested.startsWith("{")) t.access_token = nested;
+      return t;
     } catch {
       return null;
     }
@@ -184,7 +216,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       "X-Domain": "www.codebuddy.cn",
       "X-Product": "SaaS",
       "Authorization": `Bearer ${apiKey}`,
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "User-Agent": "CLI/2.148.0 CodeBuddy/2.148.0",
     };
   }
 
@@ -812,7 +844,9 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       // Network error on billing — fall through to chat endpoint check
     }
 
-    // Fallback: use chat completions endpoint (abort immediately after status)
+    // Fallback: use chat completions endpoint (abort immediately after status).
+    // Body must be system-first: upstream rejects user-first with 400-class
+    // (global: code 11128), which would false-report a live key as expired.
     const controller = new AbortController();
     try {
       const response = await fetch(`${this.baseUrl}/v2/chat/completions`, {
@@ -821,7 +855,10 @@ export class CodeBuddyChinaProvider extends BaseProvider {
         headers: this.buildHeaders(apiKey),
         body: JSON.stringify({
           model: "deepseek-v3",
-          messages: [{ role: "user", content: "hi" }],
+          messages: [
+            { role: "system", content: "You are CodeBuddy Code." },
+            { role: "user", content: "hi" },
+          ],
           max_tokens: 5,
           stream: true,
         }),
@@ -859,7 +896,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       "Accept": "application/json, text/plain, */*",
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "User-Agent": "CLI/2.148.0 CodeBuddy/2.148.0",
     };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
@@ -906,11 +943,23 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       strictKimiVision: kimiK3,
     });
 
+    // Upstream rejects calls whose first message is not system
+    // (global: 400 code 11128; CN untested pre-fix). Force system-first —
+    // parity with CodeBuddyProvider.makeRequest / Cartethyia globalModels.
+    const systemIdx = messages.findIndex((m: any) => m?.role === "system");
+    if (systemIdx > 0) {
+      const [sys] = messages.splice(systemIdx, 1);
+      messages.unshift(sys);
+    } else if (systemIdx < 0) {
+      messages.unshift({ role: "system", content: "You are CodeBuddy Code." });
+    }
+
     const body: Record<string, unknown> = {
       model: resolved,
       messages,
       stream: true, // Always stream for China version
     };
+
 
     if (hasVision) {
       // Vision images are passed inline via the messages array (OpenAI standard format).

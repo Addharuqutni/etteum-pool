@@ -18,7 +18,7 @@ interface QueueItem {
 interface BulkAddItem {
   email: string;
   password: string;
-  providers: string[]; // ["kiro", "codebuddy", "canva"]
+  providers: string[]; // ["codebuddy", "canva", "codex"]
 }
 
 class LoginQueue {
@@ -90,7 +90,7 @@ class LoginQueue {
 
     for (const item of items) {
       for (const provider of item.providers) {
-        if (!["kiro", "kiro-pro", "codebuddy", "canva", "codex", "qoder", "gitlab-duo"].includes(provider)) continue;
+        if (!["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"].includes(provider)) continue;
 
         try {
           const [newAccount] = await db
@@ -120,19 +120,6 @@ class LoginQueue {
     this.enqueueBulk(accountIds, { headless: options.headless, browserEngine: options.browserEngine });
 
     return { created, queued: accountIds.length };
-  }
-
-  /**
-   * Bulk add with ALL providers (kiro + codebuddy + canva) for each email
-   */
-  async bulkAddAllProviders(
-    credentials: Array<{ email: string; password: string }>
-  ): Promise<{ created: number; queued: number }> {
-    const items: BulkAddItem[] = credentials.map((c) => ({
-      ...c,
-      providers: ["kiro", "kiro-pro", "codebuddy", "canva"],
-    }));
-    return this.bulkAdd(items);
   }
 
   /**
@@ -249,7 +236,7 @@ class LoginQueue {
     if (result.success) {
       this.totalSuccess++;
     } else {
-      // Don't retry if explicitly marked (e.g. kiro-pro upgrade failed but login succeeded)
+      // Don't retry if explicitly marked (e.g. a login succeeded but quota is exhausted)
       if ((result as any).noRetry) {
         this.totalFailed++;
         // If not_eligible error, stop entire queue — this is a global condition

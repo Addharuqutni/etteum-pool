@@ -168,7 +168,10 @@ export const PUDIDIL_FILTERS: FilterRule[] = [
   },
 ];
 
-import { getFilterRulesCached } from "./filter-cache";
+import { getCompiledFilters, compileFilter, type CompiledFilter } from "./filter-cache";
+
+// Precompile const fallback once (pre-boot only; DB cache replaces it after load).
+let fallbackFilters: CompiledFilter[] | null = null;
 
 /**
  * Apply pudidil filters to a string. Reads rules from in-memory cache (DB-backed).
@@ -176,26 +179,17 @@ import { getFilterRulesCached } from "./filter-cache";
  */
 export function applyPudidilFilters(content: string): string {
   let filtered = content;
-  const cached = getFilterRulesCached();
+  const cached = getCompiledFilters();
   const rules = cached.length > 0
-    ? cached.map((r) => ({ pattern: r.pattern, replacement: r.replacement, is_active: r.isActive, is_regex: r.isRegex }))
-    : PUDIDIL_FILTERS;
+    ? cached
+    : (fallbackFilters ??= PUDIDIL_FILTERS.filter((r) => r.is_active)
+        .map((r) => compileFilter(r.pattern, r.replacement, r.is_regex)));
 
   for (const rule of rules) {
-    if (!rule.is_active) continue;
-
-    if (rule.is_regex) {
-      try {
-        const regex = new RegExp(rule.pattern, "gi");
-        filtered = filtered.replace(regex, rule.replacement);
-      } catch (error) {
-        console.error(`[Filter] Invalid regex pattern: ${rule.pattern}`, error);
-      }
-    } else {
-      if (!rule.pattern) continue;
-      while (filtered.includes(rule.pattern)) {
-        filtered = filtered.replace(rule.pattern, rule.replacement);
-      }
+    if (rule.regex) {
+      filtered = filtered.replace(rule.regex, rule.replacement);
+    } else if (rule.pattern) {
+      filtered = filtered.replaceAll(rule.pattern, rule.replacement);
     }
   }
 

@@ -18,8 +18,18 @@ import { getByokProvider } from "./providers/registry";
 const MAPPING_ENABLED_SETTING = "model_mapping_enabled";
 
 let cache: ModelMapping[] = [];
+/**
+ * Precomputed match structures, rebuilt by loadModelMappingCache().
+ * Hot path (resolveModelAlias) must not lowercase per rule or construct
+ * RegExp per request — both allocate and regex compile is expensive.
+ */
+interface CompiledMapping {
+   rule: ModelMapping;
+   sourceLower: string;
+   regex: RegExp | null;
+ }
+let compiled: CompiledMapping[] = [];
 let masterEnabled = true;
-
 /**
  * Default mappings seeded on first boot. Templates for Claude Code's three
  * model classes (haiku / sonnet / opus). They start disabled with an empty
@@ -84,13 +94,25 @@ export async function seedModelMappings(): Promise<void> {
 /** Load mappings + master toggle into the in-memory cache. */
 export async function loadModelMappingCache(): Promise<void> {
   cache = await db.select().from(modelMappings).orderBy(asc(modelMappings.priority));
+  compiled = cache.map((rule) => {
+     const sourceLower = rule.sourcePattern.toLowerCase();
+     let regex: RegExp | null = null;
+     if (rule.matchType === "regex" && rule.sourcePattern) {
+       try {
+         regex = new RegExp(rule.sourcePattern, "i");
+       } catch (e) {
+         console.error(`[ModelMapping] invalid regex "${rule.sourcePattern}":`, e);
+       }
+     }
+     return { rule, sourceLower, regex };
+   });
   const [setting] = await db
     .select()
     .from(settings)
     .where(eq(settings.key, MAPPING_ENABLED_SETTING));
-  // Default ON when the setting was never written.
+   // Default ON when the setting was never written.
   masterEnabled = setting?.value == null ? true : setting.value !== "false";
-}
+ }
 
 export function invalidateModelMappingCache(): void {
   loadModelMappingCache().catch((e) => console.error("[ModelMapping] reload failed", e));
@@ -104,24 +126,23 @@ export function isModelMappingEnabled(): boolean {
   return masterEnabled;
 }
 
-function matchesPattern(model: string, rule: ModelMapping): boolean {
-  const source = rule.sourcePattern;
-  if (!source) return false;
-  switch (rule.matchType) {
+function matchesCompiled(modelLower: string, c: CompiledMapping): boolean {
+  if (!c.sourceLower) return false;
+  switch (c.rule.matchType) {
     case "exact":
-      return model.toLowerCase() === source.toLowerCase();
+       return modelLower === c.sourceLower;
     case "regex":
-      try {
-        return new RegExp(source, "i").test(model);
-      } catch (e) {
-        console.error(`[ModelMapping] invalid regex "${source}":`, e);
-        return false;
-      }
+       if (!c.regex) return false;
+       try {
+         return c.regex.test(modelLower);
+       } catch {
+         return false;
+       }
     case "contains":
     default:
-      return model.toLowerCase().includes(source.toLowerCase());
+       return modelLower.includes(c.sourceLower);
   }
-}
+ }
 
 /**
  * Model ids that are native to a specific in-pool provider (not the assistant's
@@ -132,8 +153,9 @@ function matchesPattern(model: string, rule: ModelMapping): boolean {
  * underscore presence as the discriminator is a safe and zero-config rule.
  */
 function isNativeProviderId(model: string): boolean {
-  // Underscore-style identifiers: claude_sonnet_4_6, gpt_5_codex, gemini_3_5_flash, …
-  if (/^(claude|gpt|gemini)_/.test(model)) return true;
+   // Underscore-style identifiers: claude_sonnet_4_6, gpt_5_codex, gemini_3_5_flash, …
+   // (startsWith trio — cheaper than a regex test on every request).
+  if (model.startsWith("claude_") || model.startsWith("gpt_") || model.startsWith("gemini_")) return true;
   // Explicit alias prefixes used by routed providers:
   if (model.startsWith("qd-")) return true;          // Qoder (legacy, kept for id stability)
   if (model.startsWith("cb-")) return true;          // CodeBuddy
@@ -149,18 +171,19 @@ function isNativeProviderId(model: string): boolean {
  * Rewrite an incoming model id to its mapped target, if any. Single pass (no
  * recursive remapping). Returns the original model when mapping is disabled,
  * no rule matches, the target is empty/identical, or the id is a native
- * in-pool provider id (which is never the target of a generic Claude Code
+ * in-pool provider id (which is never the target of a generic the assistant
  * mapping).
  */
 export function resolveModelAlias(model: string): string {
   if (!model || !masterEnabled) return model;
   if (isNativeProviderId(model)) return model;
-  for (const rule of cache) {
-    if (!rule.enabled) continue;
-    if (!rule.targetModel) continue;
-    if (matchesPattern(model, rule)) {
-      return rule.targetModel === model ? model : rule.targetModel;
-    }
-  }
+  const modelLower = model.toLowerCase();
+  for (const c of compiled) {
+    if (!c.rule.enabled) continue;
+    if (!c.rule.targetModel) continue;
+    if (matchesCompiled(modelLower, c)) {
+      return c.rule.targetModel === model ? model : c.rule.targetModel;
+     }
+   }
   return model;
-}
+ }

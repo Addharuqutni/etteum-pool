@@ -74,7 +74,7 @@ export interface PonytailMarkerHit {
   /** Upgrade path text from the marker. */
   upgradePath: string;
   /** Where in the response the marker was found. */
-  location: "content" | "tool_input" | "tool_result";
+  location: "content" | "tool_input" | "tool_result" | "tool_calls";
 }
 
 export interface TSCConfig {
@@ -94,6 +94,7 @@ export interface CompressionConfig {
   rtk: RTKConfig;
   dcp: DCPConfig;
   caveman: CavemanConfig;
+  ponytail: PonytailConfig;
   cacheMarkers: CacheMarkerConfig;
   imageDedupe: ImageDedupeConfig;
   tsc: TSCConfig;
@@ -103,6 +104,7 @@ export type CompressionTechnique =
   | "rtk"
   | "dcp"
   | "caveman"
+  | "ponytail"
   | "imageDedupe"
   | "cacheMarkers"
   | "tsc";
@@ -124,6 +126,12 @@ export interface CompressionStats {
    * touched in this request.
    */
   rtkFilters?: Record<string, number>;
+  /** Ponytail output-marker telemetry (markers found in provider response). */
+  ponytail?: {
+    inputOverhead: number;
+    outputMarkers: number;
+    markerHits: PonytailMarkerHit[];
+  };
   /** Wall-clock duration of the pipeline in ms. */
   durationMs: number;
 }
@@ -144,6 +152,12 @@ export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
   caveman: {
     enabled: false,
     level: "lite",
+  },
+  ponytail: {
+    enabled: false,
+    mode: "full",
+    providerOverrides: {},
+    stripMarkersFromOutput: false,
   },
   cacheMarkers: {
     enabled: true,

@@ -47,6 +47,40 @@ function redactLogBody(value: unknown): unknown {
   return value;
 }
 
+export interface StreamLogSummary {
+  stream: true;
+  model: string;
+  contentPreview: string;
+  contentBytes: number;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  _poolprox: { creditSource: string };
+}
+
+// Ringkasan minimal body stream: teks terkumpul + usage. prepareLogBody tetap
+// yang menangani redact/truncate agar tak ada logika potong ganda di sini.
+export function buildStreamLogSummary(args: {
+  model: string;
+  content: string;
+  contentBytes: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  creditSource: string;
+}): StreamLogSummary {
+  return {
+    stream: true,
+    model: args.model,
+    contentPreview: args.content,
+    contentBytes: args.contentBytes,
+    usage: {
+      promptTokens: args.promptTokens,
+      completionTokens: args.completionTokens,
+      totalTokens: args.totalTokens,
+    },
+    _poolprox: { creditSource: args.creditSource },
+  };
+}
+
 export function prepareLogBody(value: unknown): unknown {
   const { logBodyEnabled, logBodyFull, logBodyRedact, logBodyMaxBytes } = config;
   if (!logBodyEnabled) return null;

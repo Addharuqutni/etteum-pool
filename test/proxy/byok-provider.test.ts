@@ -13,7 +13,6 @@ import type { Account } from "../../src/db/schema";
 
 describe("BYOK Provider", () => {
   beforeEach(async () => {
-    // Clean up BYOK accounts before each test
     await db.delete(accounts).where(eq(accounts.provider, "byok"));
     await refreshByokModels();
   });
@@ -119,7 +118,7 @@ describe("BYOK Provider", () => {
         provider: "byok",
         email: "inactive",
         password: encrypt("key"),
-        status: "error", // Not active
+        status: "exhausted", // Not active/error
         enabled: true,
         tokens: JSON.stringify({
           base_url: "https://api.com/v1",
