@@ -14,10 +14,11 @@ import { safeFetch } from "../../utils/ssrf";
  * Credential stored on the account as JSON `{accessToken,projectId,...}`.
  */
 export const ANTIGRAVITY_OAUTH = {
-  // Credentials are env-driven (see config.antigravityClientId/ClientSecret) so
-  // they never appear in source. Set ANTIGRAVITY_CLIENT_ID / _SECRET in `.env`.
-  clientId: config.antigravityClientId,
-  clientSecret: config.antigravityClientSecret,
+  // Public installed-app OAuth client (Google Cloud Code Assist). These are not
+  // confidential secrets (Google treats installed-app client secrets as
+  // non-secret), so they are kept in source intentionally.
+  clientId: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+  clientSecret: "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",
   authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenUrl: "https://oauth2.googleapis.com/token",
   userinfoUrl: "https://www.googleapis.com/oauth2/v1/userinfo",

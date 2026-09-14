@@ -16,26 +16,48 @@ export default function AntigravityOAuthCallback() {
   useEffect(() => {
     const code = searchParams.get("code") || "";
     const state = searchParams.get("state") || "";
-    
+    const error = searchParams.get("error") || "";
+    const errorDescription = searchParams.get("error_description") || "";
+
+    // Popup mode: opened by Accounts.tsx via window.open. Hand the result back
+    // to the opener (it exchanges the token) and close ourselves — window.close()
+    // is allowed here because this script lives inside the popup.
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(
+        { type: "oauth_callback", data: { code, state, error, errorDescription } },
+        window.location.origin
+      );
+      window.close();
+      return;
+    }
+
+    if (error) {
+      setError(`OAuth error: ${error}${errorDescription ? ` - ${errorDescription}` : ""}`);
+      setStatus("error");
+      return;
+    }
+
     if (!code || !state) {
       setError("Missing authorization code or state parameter");
       setStatus("error");
       return;
     }
 
+
+    // Full-tab mode (manual flow): no opener, so exchange here and navigate.
     async function completeLogin() {
       try {
         setMessage("Exchanging code for tokens and provisioning Google project...");
         const result = await completeAntigravityOAuth({ code, state });
-        
+
         if (result.success) {
           setStatus("success");
           setMessage(
-            `✅ Successfully authenticated as ${result.connection?.email || "Antigravity user"}` + 
+            `✅ Successfully authenticated as ${result.connection?.email || "Antigravity user"}` +
             `\nProject ID: ${result.connection?.projectId || "N/A"}` +
             `\n\nRedirecting to accounts page...`
           );
-          
+
           setTimeout(() => {
             navigate("/accounts");
           }, 3000);
@@ -51,6 +73,7 @@ export default function AntigravityOAuthCallback() {
 
     completeLogin();
   }, [searchParams, navigate]);
+
 
   return (
     <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] p-8 flex items-center justify-center">

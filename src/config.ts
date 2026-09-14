@@ -43,11 +43,6 @@ providerQuotaTimeoutMs: Number(process.env.POOLPROX_PROVIDER_QUOTA_TIMEOUT_MS) |
   browserEngine: process.env.BROWSER_ENGINE || "camoufox",
   captchaService: process.env.CAPTCHA_SERVICE || "none",
   captchaApiKey: process.env.CAPTCHA_API_KEY || "",
-  // Antigravity (Google Cloud Code Assist) OAuth credentials — read from env so
-  // they are never committed to source. No fallbacks: set ANTIGRAVITY_CLIENT_ID
-  // and ANTIGRAVITY_CLIENT_SECRET in `.env` (a public installed-app client).
-  antigravityClientId: process.env.ANTIGRAVITY_CLIENT_ID || "",
-  antigravityClientSecret: process.env.ANTIGRAVITY_CLIENT_SECRET || "",
   // Providers: codebuddy, codebuddy-china, canva, codex, grok-cli, claude, byok, antigravity
   providers: ["codebuddy", "codebuddy-china", "canva", "codex", "grok-cli", "claude", "byok", "antigravity"] as const,
 } as const;
