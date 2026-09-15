@@ -13,6 +13,7 @@ from app.providers.wavespeed import WavespeedProviderAdapter
 from app.providers.canva import CanvaProviderAdapter
 from app.providers.yepapi import YepAPIAdapter
 from app.providers.codex import CodexProviderAdapter
+from app.providers.antigravity import AntigravityProviderAdapter
 from app.providers.base import NormalizedAccount
 from app.errors.codes import ErrorCode
 from app.errors.exceptions import BatcherError, RetryableBatcherError
@@ -343,21 +344,27 @@ async def main(email: str, password: str):
     }
 
     if allowed_providers:
+        # Antigravity drives Google's consent flow; Google blocks headless
+        # automated logins far more aggressively, so force headful for it.
+        if "antigravity" in allowed_providers:
+            os.environ["BATCHER_CAMOUFOX_HEADLESS"] = "false"
+
         provider_specs = {
             "codebuddy": (CodeBuddyProviderAdapter(), NormalizedAccount(provider="codebuddy", identifier=email, secret=password)),
             "canva": (CanvaProviderAdapter(), NormalizedAccount(provider="canva", identifier=email, secret=password)),
             "codex": (CodexProviderAdapter(), NormalizedAccount(provider="codex", identifier=email, secret=password)),
+            "antigravity": (AntigravityProviderAdapter(), NormalizedAccount(provider="antigravity", identifier=email, secret=password)),
         }
         tasks = []
         task_names = []
-        for name in ["codebuddy", "canva", "codex"]:
+        for name in ["codebuddy", "canva", "codex", "antigravity"]:
             if name in allowed_providers:
                 adapter, account = provider_specs[name]
                 tasks.append(run_provider(adapter, account))
                 task_names.append(name)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         result = {"type": "result"}
-        for name in ["codebuddy", "wavespeed", "canva", "yepapi", "codex"]:
+        for name in ["codebuddy", "wavespeed", "canva", "yepapi", "codex", "antigravity"]:
             result[name] = {"success": False, "provider": name, "error": "skipped"}
         for name, provider_result in zip(task_names, results):
             if isinstance(provider_result, BaseException):

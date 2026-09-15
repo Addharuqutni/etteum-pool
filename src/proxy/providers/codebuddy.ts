@@ -220,23 +220,43 @@ export async function refreshCodebuddyToken(refreshToken: string): Promise<{
 }
 
 /** Map cb- prefixed model IDs to the actual CodeBuddy API model names.
- * Live-verified 2026-09-14 (chat stream, system-first, max_tokens>=100):
- * gpt-5.x need max_tokens>=100 or upstream 11133; removed everything 11102.
+ * Live-verified 2026-09-15 (chat stream, system-first, max_tokens>=100,
+ * account id 406): 200 = live, 11102 "service info not found" = dead.
+ * No catalog endpoint exists upstream — bogus names 11102 without leaking
+ * the list, so this map is the catalog (probe script: fetch-cb-models.ts).
  */
 const CB_MODEL_MAP: Record<string, string> = {
-  // Claude (only live tier: opus-4.6, opus-4.7-1m, sonnet-4.6)
+  // Claude (live: opus-4.6, opus-4.7-1m, sonnet-4.6; dead: opus-4.7/4.8, sonnet-4.5, haiku-4.5)
   "cb-opus-4.6": "claude-opus-4.6",
   "cb-opus-4.7-1m": "claude-opus-4.7-1m",
   "cb-sonnet-4.6": "claude-sonnet-4.6",
-  // GPT (only live: 5.3-codex, 5.4, 5.5 — all need max_tokens>=100)
+  // GPT (live: 5.3-codex, 5.4, 5.5, 5.6-sol/terra/luna; dead: 5.1*, 5.2*, 5.5-xhigh)
   "cb-gpt-5.3-codex": "gpt-5.3-codex",
   "cb-gpt-5.4": "gpt-5.4",
   "cb-gpt-5.5": "gpt-5.5",
-  // Gemini (live: 3.1-pro, 3.5-flash)
+  "cb-gpt-5.6-sol": "gpt-5.6-sol",
+  "cb-gpt-5.6-terra": "gpt-5.6-terra",
+  "cb-gpt-5.6-luna": "gpt-5.6-luna",
+  // Gemini (live: 3.1-pro, 3.5-flash; dead: 2.5*, 3.0-flash, 3.1-flash-lite)
   "cb-gemini-3.1-pro": "gemini-3.1-pro",
   "cb-gemini-3.5-flash": "gemini-3.5-flash",
-  // Kimi (live)
+  // Kimi (live: k2.5/k2.6/k2.7/k3; dead on intl: k3-1)
   "cb-kimi-k2.5": "kimi-k2.5",
+  "cb-kimi-k2.6": "kimi-k2.6",
+  "cb-kimi-k2.7": "kimi-k2.7",
+  "cb-kimi-k3": "kimi-k3",
+  // DeepSeek (live: v3, v4.1-flash; dead: r1, v3-2-volc, v4-flash, v4-pro)
+  "cb-deepseek-v3": "deepseek-v3",
+  "cb-deepseek-v4.1-flash": "deepseek-v4.1-flash",
+  // GLM (live: 5.1/5.2/5.3, 5v-turbo; dead: 5.0-turbo, 5.3-flash)
+  "cb-glm-5.1": "glm-5.1",
+  "cb-glm-5.2": "glm-5.2",
+  "cb-glm-5.3": "glm-5.3",
+  "cb-glm-5v-turbo": "glm-5v-turbo",
+  // MiniMax/Hunyuan (live: m3, hy3, hy4-preview; dead: m2.7, hy3-preview)
+  "cb-minimax-m3": "minimax-m3",
+  "cb-hy3": "hy3",
+  "cb-hy4-preview": "hy4-preview",
 };
 
 /**
@@ -265,25 +285,36 @@ export class CodeBuddyProvider extends BaseProvider {
 
 
   supportedModels: ModelInfo[] = [
-    // Credit rates derived from confirmed data point:
-    //   claude-opus-4.6 = 6.97 credits / 260,613 tokens = 0.02674 credits/1K tokens
-    // Other models estimated from upstream API pricing ratios relative to opus-4.6.
-    // Upstream prices ($/M tokens): opus=$5/$25, gpt-5.5=$5/$30, gpt-5.1=$1.25/$10,
-    //   gemini-2.5-pro=$1.25/$10, gemini-flash=$0.30/$2.50, deepseek=$0.14/$0.28
+    // Credit rates: opus-4.6 datum 0.02674/1K; rest scaled by upstream $/M ratios.
     // 1 CodeBuddy credit ≈ $0.01 passthrough.
 
-    // All models exposed with cb- prefix only. Live-verified 2026-09-14
-    // (chat stream, system-first): only these answer 200; rest 11102/11133.
+    // Live-verified 2026-09-15 (chat stream, system-first, max_tokens>=100):
+    // only these answer 200; rest 11102 "service info not found".
     // NOTE: gpt-5.x need max_tokens>=100 or upstream answers 11133.
     { id: "cb-opus-4.7-1m", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
     { id: "cb-opus-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.027 / 1000, creditSource: "estimated" },
     { id: "cb-sonnet-4.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 200000, max_output: 64000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
+    { id: "cb-gpt-5.6-sol", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.030 / 1000, creditSource: "estimated" },
+    { id: "cb-gpt-5.6-terra", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
+    { id: "cb-gpt-5.6-luna", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.006 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.3-codex", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.013 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.4", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.018 / 1000, creditSource: "estimated" },
     { id: "cb-gpt-5.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.035 / 1000, creditSource: "estimated" },
     { id: "cb-gemini-3.1-pro", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.015 / 1000, creditSource: "estimated" },
     { id: "cb-gemini-3.5-flash", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: true, vision: true, creditUnit: "token", creditRate: 0.004 / 1000, creditSource: "estimated" },
     { id: "cb-kimi-k2.5", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-kimi-k2.6", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 256000, max_output: 32000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.009 / 1000, creditSource: "estimated" },
+    { id: "cb-kimi-k2.7", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 256000, max_output: 32000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.007 / 1000, creditSource: "estimated" },
+    { id: "cb-kimi-k3", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 256000, max_output: 32000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.007 / 1000, creditSource: "estimated" },
+    { id: "cb-deepseek-v3", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 64000, max_output: 8192, thinking: false, vision: false, creditUnit: "token", creditRate: 0.001 / 1000, creditSource: "estimated" },
+    { id: "cb-deepseek-v4.1-flash", object: "model", created: Date.now(), owned_by: "codebuddy", context_window: 1000000, max_output: 128000, thinking: true, vision: true, creditUnit: "token", creditRate: 0.002 / 1000, creditSource: "estimated" },
+    { id: "cb-glm-5.1", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-glm-5.2", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-glm-5.3", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-glm-5v-turbo", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: true, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-minimax-m3", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-hy3", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
+    { id: "cb-hy4-preview", object: "model", created: Date.now(), owned_by: "codebuddy", thinking: false, vision: false, creditUnit: "token", creditRate: 0.005 / 1000, creditSource: "estimated" },
   ];
 
   private getTokens(account: Account): CodeBuddyTokens | null {

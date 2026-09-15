@@ -351,11 +351,11 @@ interface AntigravityRequestEnvelope {
   model: string;
   userAgent: string;
   requestType: "agent";
-  labels: Record<string, string>;
   request: {
     contents: GeminiContent[];
     generationConfig: Record<string, unknown>;
     sessionId: string;
+    labels: Record<string, string>;
     systemInstruction?: { parts: GeminiPart[] };
     tools?: unknown[];
     toolConfig?: Record<string, unknown>;
@@ -485,6 +485,7 @@ function buildAntigravityRequest(
     contents: contents.length > 0 ? contents : [{ role: "user", parts: [{ text: "" }] }],
     generationConfig,
     sessionId: state.sessionId,
+    labels,
   };
   if (systemTexts.length > 0) {
     payload.systemInstruction = { parts: [{ text: systemTexts.join("\n\n") }] };
@@ -504,7 +505,6 @@ function buildAntigravityRequest(
     model: wireModel,
     userAgent: "antigravity",
     requestType: "agent",
-    labels,
     request: payload,
   };
 }
