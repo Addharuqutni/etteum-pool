@@ -23,6 +23,18 @@ import { runPeriodicChecks } from "./services/alerts";
 import { stickyStore } from "./proxy/sticky";
 import { cooldowns } from "./proxy/cooldown";
 
+// Crash forensics: without these, an uncaught async error in a route/timer/promise
+// silently kills Bun with no useful trace — matches the user's "crashed, no reason"
+// symptom. Log full context, THEN exit non-zero so production.ts sees it.
+process.on("uncaughtException", (err, origin) => {
+  console.error(`[FATAL] uncaughtException (${origin}):`, err instanceof Error ? err.stack || err.message : err);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack || reason.message : reason);
+  process.exit(1);
+});
+
 // Run database migrations on startup
 await runMigrations();
 

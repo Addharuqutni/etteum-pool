@@ -39,7 +39,13 @@ function Test-Running {
   $procId = Get-Content $PidFile -ErrorAction SilentlyContinue
   if (-not $procId) { return $false }
   try {
+    # Verify by name too — Windows recycles PIDs, so a stale PID file can
+    # match an unrelated process and falsely report "running".
     $p = Get-Process -Id $procId -ErrorAction Stop
+    if ($p.ProcessName -ne "bun") {
+      Remove-Item $PidFile -ErrorAction SilentlyContinue
+      return $false
+    }
     return $true
   } catch {
     Remove-Item $PidFile -ErrorAction SilentlyContinue
@@ -67,7 +73,16 @@ function Invoke-Start {
     return
   }
 
+  # Preserve previous boot's log for post-crash forensics — Start-Process
+  # -RedirectStandardOutput truncates on every start, so archive first.
+  # ponytail: keep only last boot (.prev); rotate to N-generations if operators need history.
+  foreach ($f in @($LogFile, $ErrorLogFile)) {
+    if (Test-Path $f) { Move-Item $f "$f.prev" -Force -ErrorAction SilentlyContinue }
+  }
+
   Write-Host "Starting Etteum..."
+  # Spawn bun directly so $proc.Id IS the bun PID — a cmd.exe wrapper exits
+  # right after spawning, leaving PID file stale and Test-Running/Stop broken.
   $proc = Start-Process -FilePath "bun" -ArgumentList "scripts/production.ts","--skip-build" `
     -WorkingDirectory $ProjectDir -RedirectStandardOutput $LogFile -RedirectStandardError $ErrorLogFile `
     -WindowStyle Hidden -PassThru
@@ -82,8 +97,8 @@ function Invoke-Start {
   } else {
     Remove-Item $PidFile -ErrorAction SilentlyContinue
     Write-Host "Failed to start. Check logs at $LogFile" -ForegroundColor Red
-    Get-Content $LogFile -Tail 5 -ErrorAction SilentlyContinue
-    Get-Content $ErrorLogFile -Tail 5 -ErrorAction SilentlyContinue
+    Get-Content $LogFile -Tail 10 -ErrorAction SilentlyContinue
+    Get-Content $ErrorLogFile -Tail 10 -ErrorAction SilentlyContinue
   }
 }
 

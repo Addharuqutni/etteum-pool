@@ -13,7 +13,7 @@ import {
 } from "./transforms/anthropic";
 import { getSseError, getSseErrorFromParsed, isBadUpstreamRequest, isInvalidModelError, isNonAccountRequestError } from "./errors";
 import { buildStreamLogSummary, prepareLogBody } from "./logging";
-import { checkAcl, recordUsage, type ApiKeyRow } from "../services/api-keys";
+import { checkAcl, recordUsage, releaseApiKey, type ApiKeyRow } from "../services/api-keys";
 import { resolveModelAlias } from "./model-mapping";
 import { resolveCombo, getCombosCached } from "./combos";
 import { eq, sql } from "drizzle-orm";
@@ -279,12 +279,22 @@ async function peekStreamForError(
   let buffer = "";
   let error: string | undefined;
   let contentStarted = false;
+  // Cap peek accumulation: a slow/hostile upstream that never sends a
+  // parseable content event could otherwise buffer megabytes of preview
+  // bytes per concurrent request. 1 MB is plenty for real error/content
+  // preambles; past that we assume no error and stream through.
+  // ponytail: hard cap only, no time budget — add a deadline if a silent
+  // upstream materially delays TTFB.
+  const PEEK_MAX_BYTES = 1 * 1024 * 1024;
+  let peekedBytes = 0;
 
   try {
     while (!error && !contentStarted) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
+      peekedBytes += value.byteLength;
+      if (peekedBytes > PEEK_MAX_BYTES) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -364,6 +374,7 @@ function wrapStreamWithUsageFinalizer(
     quotaBefore: number;
     startedAt: number;
     apiKeyId?: number;
+    apiKeyInflightToken?: number;
     fallbackPromptTokens: number;
     fallbackCompletionTokens: number;
     fallbackTotalTokens: number;
@@ -408,7 +419,9 @@ function wrapStreamWithUsageFinalizer(
       // memory. Exact length still tracked via streamedBytes for the estimate.
       const content = extractContentFromParsed(parsed);
       if (content) {
-        streamedBytes += content.length;
+        // streamedBytes accumulates wire bytes (raw chunk byteLength in the
+        // reader loop below); do NOT add content.length here or the total
+        // is roughly doubled and completion-token estimates are inflated.
         if (retainedChars < 256 * 1024) {
           contentChunks.push(content);
           retainedChars += content.length;
@@ -428,11 +441,15 @@ function wrapStreamWithUsageFinalizer(
     finalized = true;
 
     const finalPromptTokens = promptTokens || context.fallbackPromptTokens;
+    // Join once — used up to 3 times below, each join re-allocates the full
+    // retained text (up to 256KB) and encoding again doubles the transient
+    // allocation.
+    const retainedText = contentChunks.join("");
     // When the 256KB retention cap was hit, retained chunks understate the
     // stream; fall back to the exact accumulated length for the estimate.
     const streamedEstimate = streamedBytes > retainedChars
       ? Math.max(1, Math.ceil(streamedBytes / 4))
-      : estimateTokensFromText(contentChunks.join(""));
+      : estimateTokensFromText(retainedText);
     const finalCompletionTokens = completionTokens || streamedEstimate || context.fallbackCompletionTokens;
     const finalTotalTokens = totalTokens || finalPromptTokens + finalCompletionTokens || context.fallbackTotalTokens;
     const { creditsUsed, creditSource } = computeCredits(
@@ -486,8 +503,8 @@ function wrapStreamWithUsageFinalizer(
               accountQuotaAfter: quotaAfter,
               responseBody: prepareLogBody(buildStreamLogSummary({
                 model: context.model,
-                content: contentChunks.join(""),
-                contentBytes: new TextEncoder().encode(contentChunks.join("")).byteLength,
+                content: retainedText,
+                contentBytes: new TextEncoder().encode(retainedText).byteLength,
                 promptTokens: finalPromptTokens,
                 completionTokens: finalCompletionTokens,
                 totalTokens: finalTotalTokens,
@@ -540,6 +557,13 @@ function wrapStreamWithUsageFinalizer(
         console.error("[Proxy] Failed to finalize stream usage:", error);
       } finally {
         pool.trackRequestEnd(context.accountId);
+        // Release the API-key inflight slot the middleware skipped for SSE.
+        // Without this, every streaming request leaks an entry in the
+        // `inflight` Map forever — the middleware's comment promised the
+        // finalizer would release it, but the call was missing.
+        if (context.apiKeyId !== undefined) {
+          releaseApiKey(context.apiKeyId, context.apiKeyInflightToken);
+        }
       }
     })();
   };
@@ -584,7 +608,7 @@ function wrapStreamWithUsageFinalizer(
   });
 }
 
-async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKeyRow) {
+async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKeyRow, apiKeyInflightToken?: number) {
   // Resolve combos FIRST: an exact combo name wins over model aliasing. The
   // combo loop tries each target in order, falling back to the next on failure.
   // (routeRequest still retries accounts within a provider; this adds the
@@ -596,7 +620,7 @@ async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKey
       const target = comboName[i]!; // parseTargets guarantees 1..10 entries
       const attemptBody: ChatCompletionRequest = { ...body, model: target };
       try {
-        return await handleChatCompletionSingle(attemptBody, { originalModel: body.model, combo: body.model }, apiKey);
+        return await handleChatCompletionSingle(attemptBody, { originalModel: body.model, combo: body.model }, apiKey, apiKeyInflightToken);
       } catch (error) {
         // Permanent request errors (bad model, content moderation, malformed
         // request) fail on every target — don't waste the remaining targets.
@@ -614,13 +638,14 @@ async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKey
 
   // No combo: existing alias rewrite + single route path, unchanged.
   body = { ...body, model: resolveModelAlias(normalizeModelId(body.model)) };
-  return handleChatCompletionSingle(body, undefined, apiKey);
+  return handleChatCompletionSingle(body, undefined, apiKey, apiKeyInflightToken);
 }
 
 async function handleChatCompletionSingle(
   body: ChatCompletionRequest,
   comboMeta: { originalModel: string; combo: string } | undefined,
-  apiKey?: ApiKeyRow
+  apiKey?: ApiKeyRow,
+  apiKeyInflightToken?: number
 ) {
   // ACL: provider/model allow/deny per API key — uses the row resolved by the
   // auth middleware, no re-fetch.
@@ -708,6 +733,7 @@ async function handleChatCompletionSingle(
       accountId: account.id,
       accountEmail: account.email,
       apiKeyId,
+      apiKeyInflightToken,
       provider,
       model: body.model,
       quotaBefore,
@@ -812,9 +838,10 @@ proxyRouter.post("/v1/chat/completions", async (c) => {
   body.model = normalizeModelId(body.model);
   const isStream = body.stream === true;
   const apiKey = c.get("apiKey") as ApiKeyRow | undefined;
+  const apiKeyInflightToken = c.get("apiKeyInflightToken") as number | undefined;
 
   try {
-    const { result } = await handleChatCompletion(body, apiKey);
+    const { result } = await handleChatCompletion(body, apiKey, apiKeyInflightToken);
 
     if (isStream && result.stream) {
       // Return SSE stream
@@ -899,9 +926,10 @@ proxyRouter.post("/v1/messages", async (c) => {
   body.model = normalizeModelId(body.model);
   const openAIRequest = anthropicToOpenAI(body);
   const apiKey = c.get("apiKey") as ApiKeyRow | undefined;
+  const apiKeyInflightToken = c.get("apiKeyInflightToken") as number | undefined;
 
   try {
-    const { result } = await handleChatCompletion(openAIRequest, apiKey);
+    const { result } = await handleChatCompletion(openAIRequest, apiKey, apiKeyInflightToken);
 
     if (body.stream === true && result.stream) {
       return new Response(openAIStreamToAnthropic(result.stream, body), {

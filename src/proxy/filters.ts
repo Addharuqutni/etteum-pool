@@ -173,11 +173,21 @@ import { getCompiledFilters, compileFilter, type CompiledFilter } from "./filter
 // Precompile const fallback once (pre-boot only; DB cache replaces it after load).
 let fallbackFilters: CompiledFilter[] | null = null;
 
+// Skip filtering strings larger than this — the filter set targets short
+// identity/header patterns (<1KB each), never legitimately present in
+// megabyte-scale content (base64 images inlined as strings, huge tool
+// results). Running 15 regex passes over a 10MB string was a real crash
+// vector on Bun < 1.4 (VM segfault under memory pressure).
+// ponytail: hard cap only; add pattern-aware whitelisting if any rule ever
+// needs to match on genuinely large content.
+const FILTER_MAX_INPUT_BYTES = 256 * 1024;
+
 /**
  * Apply pudidil filters to a string. Reads rules from in-memory cache (DB-backed).
  * Falls back to PUDIDIL_FILTERS const if cache is empty (pre-boot).
  */
 export function applyPudidilFilters(content: string): string {
+  if (content.length > FILTER_MAX_INPUT_BYTES) return content;
   let filtered = content;
   const cached = getCompiledFilters();
   const rules = cached.length > 0

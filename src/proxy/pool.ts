@@ -296,6 +296,7 @@ class AccountPool {
         .set({
           lastUsedAt: new Date(),
           updatedAt: new Date(),
+          errorMessage: null,
         })
         .where(eq(accounts.id, accountId));
     } catch (err) {
