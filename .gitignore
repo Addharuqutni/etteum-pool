@@ -87,7 +87,7 @@ drizzle/
 
 # AI Agents
 CLAUDE.md
-
+.omp
 
 # Playwright MCP runtime
 .playwright-mcp/
