@@ -666,6 +666,96 @@ describe("compressRequest — orchestrator", () => {
     expect(request).toBe(req); // referential identity preserved
   });
 
+  it("TSC trims nested property descriptions at every depth", () => {
+    // Real schemas spend most of their bytes in `properties.*.description`, not
+    // the top-level one, so trimming only the latter left the bulk untouched.
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+      ...({
+        tools: [{
+          name: "Edit",
+          description: "Top level.\n\n\n\nNotes.",
+          input_schema: {
+            type: "object",
+            properties: {
+              path: { type: "string", description: "The   absolute   path." },
+              nested: {
+                type: "object",
+                properties: { deep: { type: "string", description: "Deep.\n\n\n\nNested twice." } },
+              },
+              list: { type: "array", items: { type: "string", description: "Array   item." } },
+            },
+          },
+        }],
+      } as any),
+    };
+
+    const { request } = applyTSC(req, {
+      enabled: true,
+      stripSchemaWhitespace: true,
+      trimDescriptions: true,
+      dropSchemaMeta: true,
+    });
+
+    const schema = (request as any).tools[0].input_schema;
+    expect(schema.properties.path.description).toBe("The absolute path.");
+    expect(schema.properties.nested.properties.deep.description).toBe("Deep.\n\nNested twice.");
+    expect(schema.properties.list.items.description).toBe("Array item.");
+  });
+
+  it("TSC leaves nested descriptions alone when trimDescriptions is off", () => {
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+      ...({
+        tools: [{
+          name: "Edit",
+          input_schema: { type: "object", properties: { p: { type: "string", description: "Keep   these." } } },
+        }],
+      } as any),
+    };
+
+    const { request } = applyTSC(req, {
+      enabled: true,
+      stripSchemaWhitespace: true,
+      trimDescriptions: false,
+      dropSchemaMeta: true,
+    });
+
+    expect((request as any).tools[0].input_schema.properties.p.description).toBe("Keep   these.");
+  });
+
+  it("TSC trims nested descriptions even when schema meta dropping is off", () => {
+    // The schema walk used to run only for dropSchemaMeta, so disabling that
+    // silently disabled description trimming too.
+    const req: ChatCompletionRequest = {
+      model: "test",
+      messages: [{ role: "user", content: "hi" }],
+      ...({
+        tools: [{
+          name: "Edit",
+          input_schema: {
+            $schema: "keep-me",
+            type: "object",
+            properties: { p: { type: "string", description: "Trim   me." } },
+          },
+        }],
+      } as any),
+    };
+
+    const { request } = applyTSC(req, {
+      enabled: true,
+      stripSchemaWhitespace: true,
+      trimDescriptions: true,
+      dropSchemaMeta: false,
+    });
+
+    const schema = (request as any).tools[0].input_schema;
+    expect(schema.$schema).toBe("keep-me");
+    expect(schema.properties.p.description).toBe("Trim me.");
+  });
+
   it("emptyStats produces zero everywhere", () => {
     const s = emptyStats();
     expect(s.tokensBefore).toBe(0);

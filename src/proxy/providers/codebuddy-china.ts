@@ -9,6 +9,8 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import { runSseStreamLoop } from "../stream-utils";
+import { codebuddyDomain } from "./codebuddy";
 
 interface CodeBuddyChinaTokens {
   api_key?: string;
@@ -19,7 +21,7 @@ interface CodeBuddyChinaTokens {
 }
 
 /**
- * CodeBuddy China OAuth refresh — same contract as global codebuddy.ai
+ * CodeBuddy China OAuth refresh — same contract as global codebuddy (workbuddy.ai)
  * (POST /v2/plugin/auth/token/refresh, refresh token in X-Refresh-Token header,
  * body "{}") but against www.codebuddy.cn with its own X-Domain.
  * 401/403 on refresh → refresh token dead → re-login.
@@ -42,6 +44,9 @@ export async function refreshCodebuddyChinaToken(refreshToken: string): Promise<
       "X-Product": "SaaS",
     },
     body: "{}",
+    // Same gap as the global provider's refresh: bare fetch with no deadline.
+    // Reuse the quota-probe budget (15s) — a short control-plane POST.
+    signal: AbortSignal.timeout(config.providerQuotaTimeoutMs),
   });
 
   if (response.status === 401 || response.status === 403) {
@@ -98,11 +103,31 @@ const CBC_MODEL_MAP: Record<string, string> = {
   "cbc-hy4-preview": "hy4-preview",
 };
 
+
 /**
-  * CodeBuddy China Provider — www.codebuddy.cn (CN) region
+ * Candidate API hosts in failover order. Both serve the identical /v2 API with
+ * the same credentials, so a host-level outage (DNS/TLS/5xx) is recoverable by
+ * replaying the request against the other one. Order matters: index 0 is the CN
+ * host the account was provisioned against, and is what every non-failover path
+ * (token refresh, billing) must keep using.
+ */
+export const CODEBUDDY_CHINA_BASE_URLS = [
+  "https://www.codebuddy.cn",
+  "https://www.workbuddy.ai",
+] as const;
+
+export const CODEBUDDY_CHINA_PRIMARY_BASE_URL: string = CODEBUDDY_CHINA_BASE_URLS[0];
+
+/** Host-scoped upstream failures: the peer host may still serve this account fine. */
+export function shouldFailoverStatus(status: number): boolean {
+  return status >= 500 || status === 404 || status === 405;
+}
+
+/**
+ * CodeBuddy China Provider — www.codebuddy.cn (CN) region
  *
- * Same API format as CodeBuddy global (codebuddy.ai) but:
-  * - Base URL: https://www.codebuddy.cn
+ * Same API format as CodeBuddy global (workbuddy.ai) but:
+ * - Base URL: https://www.codebuddy.cn
  * - Auth: Bearer API key (ck_* prefix)
  * - Streaming only (non-stream returns error 11101)
  * - China-specific models (GLM, Kimi, DeepSeek V4, Hunyuan, MiniMax)
@@ -129,7 +154,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     return url.startsWith("data:") || url.startsWith("ms://");
   }
 
-  private baseUrl = "https://www.codebuddy.cn";
+  private readonly baseUrls: readonly string[] = CODEBUDDY_CHINA_BASE_URLS;
 
   // Live-verified 2026-09-14 (chat stream, system-first, max_tokens>=100 on
   // www.codebuddy.cn): everything here answers 200. Specs (context/max_output)
@@ -206,14 +231,19 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     return tokens.api_key || tokens.access_token || tokens.session_token || null;
   }
 
-  private buildHeaders(apiKey: string, stream = false): Record<string, string> {
+  /**
+   * `baseUrl` must be the host actually being called: X-Domain is what upstream
+   * uses to pick the tenant/region, so a mismatch with the request host yields
+   * auth or routing errors even with a valid key.
+   */
+  private buildHeaders(apiKey: string, baseUrl: string, stream = false): Record<string, string> {
     return {
       "Accept": stream ? "text/event-stream, application/json, */*" : "application/json, text/plain, */*",
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "X-Conversation-ID": crypto.randomUUID(),
       "X-Request-ID": crypto.randomUUID().replace(/-/g, ""),
-      "X-Domain": "www.codebuddy.cn",
+      "X-Domain": codebuddyDomain(baseUrl),
       "X-Product": "SaaS",
       "Authorization": `Bearer ${apiKey}`,
       "User-Agent": "CLI/2.148.0 CodeBuddy/2.148.0",
@@ -247,6 +277,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     const cleanedMessages: any[] = [];
     let hasVision = false;
     const strictVision = !!opts?.strictKimiVision;
+
 
     for (const msg of request.messages) {
       let content = msg.content;
@@ -583,17 +614,19 @@ export class CodeBuddyChinaProvider extends BaseProvider {
 
     try {
       // Always stream — CodeBuddy China doesn't support non-stream
-      const response = await this.makeRequest(apiKey, request, true);
+      const { response } = await this.requestWithFailover(apiKey, request, true);
 
       if (response.status === 401 || response.status === 403) {
         const refreshResult = await this.refreshToken(account);
         if (!refreshResult.success || !refreshResult.tokens) {
-          return { success: false, error: "Session expired, re-login required" };
+          // Propagate the refresh failure's own reason: a hung/unreachable auth
+          // endpoint must not be relabelled as a revoked session.
+          return { success: false, error: refreshResult.error ?? "Session expired, re-login required" };
         }
         const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyChinaTokens;
         const newApiKey = this.getApiKey(newTokens);
         if (!newApiKey) return { success: false, error: "Session expired, re-login required" };
-        const retryResponse = await this.makeRequest(newApiKey, request, true);
+        const { response: retryResponse } = await this.requestWithFailover(newApiKey, request, true);
         if (retryResponse.status === 401 || retryResponse.status === 403) {
           return { success: false, error: "Session expired, re-login required" };
         }
@@ -659,17 +692,17 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     if (!apiKey) return { success: false, error: "No API key available" };
 
     try {
-      const response = await this.makeRequest(apiKey, request, true);
+      const { response } = await this.requestWithFailover(apiKey, request, true);
 
       if (response.status === 401 || response.status === 403) {
         const refreshResult = await this.refreshToken(account);
         if (!refreshResult.success || !refreshResult.tokens) {
-          return { success: false, error: "Session expired, re-login required" };
+          return { success: false, error: refreshResult.error ?? "Session expired, re-login required" };
         }
         const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyChinaTokens;
         const newApiKey = this.getApiKey(newTokens);
         if (!newApiKey) return { success: false, error: "Session expired, re-login required" };
-        const retryResponse = await this.makeRequest(newApiKey, request, true);
+        const { response: retryResponse } = await this.requestWithFailover(newApiKey, request, true);
         if (retryResponse.status === 401 || retryResponse.status === 403) {
           return { success: false, error: "Session expired, re-login required" };
         }
@@ -714,6 +747,16 @@ export class CodeBuddyChinaProvider extends BaseProvider {
       };
       return { success: true, tokens: JSON.stringify(merged) };
     } catch (error) {
+      // AbortSignal.timeout rejects with a TimeoutError DOMException whose text
+      // is not useful to an operator; name-check it so a dead auth endpoint
+      // reads as a transport failure and never as "re-login required".
+      const errName = (error as { name?: string } | null)?.name;
+      if (errName === "TimeoutError" || errName === "AbortError") {
+        return {
+          success: false,
+          error: `CodeBuddy China token refresh timed out after ${config.providerQuotaTimeoutMs}ms — auth endpoint unreachable (session NOT revoked)`,
+        };
+      }
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -849,10 +892,10 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     // (global: code 11128), which would false-report a live key as expired.
     const controller = new AbortController();
     try {
-      const response = await fetch(`${this.baseUrl}/v2/chat/completions`, {
+      const response = await fetch(`${CODEBUDDY_CHINA_PRIMARY_BASE_URL}/v2/chat/completions`, {
         method: "POST",
         signal: controller.signal,
-        headers: this.buildHeaders(apiKey),
+        headers: this.buildHeaders(apiKey, CODEBUDDY_CHINA_PRIMARY_BASE_URL),
         body: JSON.stringify({
           model: "deepseek-v3",
           messages: [
@@ -900,7 +943,7 @@ export class CodeBuddyChinaProvider extends BaseProvider {
     };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
-    return this.fetchWithTimeout(`${this.baseUrl}/v2/billing/meter/get-user-resource`, {
+    return this.fetchWithTimeout(`${CODEBUDDY_CHINA_PRIMARY_BASE_URL}/v2/billing/meter/get-user-resource`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
@@ -930,10 +973,11 @@ export class CodeBuddyChinaProvider extends BaseProvider {
   private async makeRequest(
     apiKey: string,
     request: ChatCompletionRequest,
-    stream: boolean
+    stream: boolean,
+    baseUrl: string
   ): Promise<Response> {
     const resolved = this.resolveModel(request.model);
-    const headers = this.buildHeaders(apiKey, stream);
+    const headers = this.buildHeaders(apiKey, baseUrl, stream);
     const kimiK3 = this.isKimiK3(resolved);
 
     // Clean messages: convert Anthropic-format (tool_use, tool_result, array content)
@@ -997,11 +1041,57 @@ export class CodeBuddyChinaProvider extends BaseProvider {
 
     const timeoutMs = stream ? 300_000 : config.providerRequestTimeoutMs;
 
-    return this.fetchWithTimeout(`${this.baseUrl}/v2/chat/completions`, {
+    return this.fetchWithTimeout(`${baseUrl}/v2/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
     }, timeoutMs);
+  }
+
+  /**
+   * Retry the chat request across candidate hosts. Only transport-level failures
+   * and host-scoped HTTP failures (5xx, 404, 405) justify a switch: those are the
+   * signatures of one host being down or having moved the route, while the same
+   * credentials remain valid on its peer.
+   *
+   * 401/403 deliberately do NOT fail over — auth state is account-wide, so the
+   * peer host would answer identically and the switch would only mask the
+   * refresh-then-retry path that actually recovers the session. Same for 400
+   * (our own malformed body) and 429 (quota is per-account, not per-host).
+   */
+  private async requestWithFailover(
+    apiKey: string,
+    request: ChatCompletionRequest,
+    stream: boolean
+  ): Promise<{ response: Response; baseUrl: string }> {
+    for (let i = 0; i < this.baseUrls.length; i++) {
+      const baseUrl = this.baseUrls[i] as string;
+      const nextBaseUrl = this.baseUrls[i + 1];
+      const host = new URL(baseUrl).hostname;
+
+      let response: Response;
+      try {
+        response = await this.makeRequest(apiKey, request, stream, baseUrl);
+      } catch (error) {
+        if (nextBaseUrl === undefined) throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        console.log(
+          `[CodeBuddy China] ${host} failed (${reason}), retrying via ${new URL(nextBaseUrl).hostname}`
+        );
+        continue;
+      }
+
+      if (nextBaseUrl !== undefined && shouldFailoverStatus(response.status)) {
+        console.log(
+          `[CodeBuddy China] ${host} failed (HTTP ${response.status}), retrying via ${new URL(nextBaseUrl).hostname}`
+        );
+        continue;
+      }
+
+      return { response, baseUrl };
+    }
+
+    throw new Error("CodeBuddy China: no candidate host available");
   }
 
   private async aggregateStreamResponse(response: Response, model: string): Promise<ChatCompletionResponse & { _realCredit?: number }> {
@@ -1079,85 +1169,62 @@ export class CodeBuddyChinaProvider extends BaseProvider {
 
   private createStreamResponse(response: Response, model: string): ProviderResult {
     const id = this.generateId();
-    const encoder = new TextEncoder();
-    let capturedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    let capturedRealCredit: number | null = null;
 
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        const reader = response.body?.getReader();
-        if (!reader) { controller.close(); return; }
+    const stream = runSseStreamLoop({
+      response,
+      id,
+      model,
+      logPrefix: "[CodeBuddy China]",
+      // A transport error before any content is forwarded must reject the
+      // stream, not end on a 200 carrying error text, so the proxy's combo
+      // fallback can try the next target.
+      rejectOnErrorBeforeContent: true,
+      onEvent: (parsed) => {
+        const choice = parsed.choices?.[0];
+        const delta = choice?.delta || {};
 
-        const decoder = new TextDecoder();
-        let buffer = "";
+        const chunk: StreamChunk = {
+          id: parsed.id || id,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: choice?.index ?? 0, delta, finish_reason: choice?.finish_reason || null }],
+        };
+        if (parsed.usage) chunk.usage = parsed.usage;
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith("data:")) continue;
-              const data = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-
-              if (data === "[DONE]") {
-                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                continue;
-              }
-
-              try {
-                const parsed = JSON.parse(data);
-                const choice = parsed.choices?.[0];
-                const delta = choice?.delta || {};
-
-                const chunk: StreamChunk = {
-                  id: parsed.id || id,
-                  object: "chat.completion.chunk",
-                  created: Math.floor(Date.now() / 1000),
-                  model,
-                  choices: [{
-                    index: choice?.index ?? 0,
-                    delta,
-                    finish_reason: choice?.finish_reason || null,
-                  }],
-                };
-
-                if (parsed.usage) {
-                  chunk.usage = parsed.usage;
-                  capturedUsage = {
-                    prompt_tokens: Number(parsed.usage.prompt_tokens || 0),
-                    completion_tokens: Number(parsed.usage.completion_tokens || 0),
-                    total_tokens: Number(parsed.usage.total_tokens || 0),
-                  };
-                  if (parsed.usage.credit != null && Number(parsed.usage.credit) > 0) {
-                    capturedRealCredit = Number(parsed.usage.credit);
-                  }
-                }
-
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-              } catch {
-                // skip malformed chunk
-              }
-            }
-          }
-        } catch (error) {
-          console.error("[CodeBuddy China] Stream error:", error instanceof Error ? error.message : String(error));
-        } finally {
-          try { controller.close(); } catch { /* already closed */ }
-        }
+        return {
+          chunks: [chunk],
+          content: delta.content || "",
+          toolCalls: Boolean(delta.tool_calls?.length),
+        };
+      },
+      onPlainJson: (parsed) => {
+        const choice = parsed.choices?.[0];
+        const content = String(
+          choice?.delta?.content ?? choice?.message?.content ?? parsed?.content ?? ""
+        );
+        if (!content) return {};
+        return {
+          chunks: [{
+            id: parsed.id || id,
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model,
+            choices: [{ index: choice?.index ?? 0, delta: { content }, finish_reason: choice?.finish_reason || null }],
+          }],
+          content,
+        };
       },
     });
 
     return {
       success: true,
       stream,
-      tokensUsed: capturedUsage.total_tokens,
-      promptTokens: capturedUsage.prompt_tokens,
-      completionTokens: capturedUsage.completion_tokens,
+      // A streaming turn's usage is finalized from the SSE stream by the wrapper
+      // in proxy/index.ts, so there is nothing to report here yet.
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
       creditsUsed: 0,
       creditSource: "estimated" as const,
     };

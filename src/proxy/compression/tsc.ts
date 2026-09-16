@@ -7,7 +7,10 @@
  * Targets, in order of safety:
  *   1. Strip JSON whitespace from input_schema       — fully lossless, model reads only structure
  *   2. Drop $schema/$id/additionalProperties:false   — JSON-Schema metadata, ignored by LLM
- *   3. Collapse runs of whitespace in descriptions   — model treats `   ` and ` ` identically
+ *   3. Collapse runs of whitespace in descriptions   — model treats `   ` and ` ` identically.
+ *                                                     Applied at every depth, including the
+ *                                                     nested `properties.*` where real schemas
+ *                                                     spend most of their bytes.
  *
  * Handles both Anthropic-flavor (`{name, description, input_schema}`) and
  * OpenAI-flavor (`{type:"function", function:{name, description, parameters}}`)
@@ -34,17 +37,30 @@ function trimDescription(s: string): string {
     .trim();
 }
 
-function compactSchema(node: unknown, dropMeta: boolean): unknown {
+interface CompactOptions {
+  /** Drop JSON-Schema metadata keys the model never acts on. */
+  dropMeta: boolean;
+  /** Collapse whitespace runs inside every `description`, at any depth. */
+  trimDescriptions: boolean;
+}
+
+function compactSchema(node: unknown, opts: CompactOptions): unknown {
   if (Array.isArray(node)) {
-    return node.map((n) => compactSchema(n, dropMeta));
+    return node.map((n) => compactSchema(n, opts));
   }
   if (node && typeof node === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(node)) {
-      if (dropMeta && META_KEYS_TO_DROP.has(k)) continue;
+      if (opts.dropMeta && META_KEYS_TO_DROP.has(k)) continue;
       // additionalProperties:false is JSON-Schema noise the model doesn't act on.
-      if (dropMeta && k === "additionalProperties" && v === false) continue;
-      out[k] = compactSchema(v, dropMeta);
+      if (opts.dropMeta && k === "additionalProperties" && v === false) continue;
+      // Property descriptions are where real schemas spend most of their bytes,
+      // and they nest arbitrarily deep, so trim them at every level.
+      if (opts.trimDescriptions && k === "description" && typeof v === "string") {
+        out[k] = trimDescription(v);
+        continue;
+      }
+      out[k] = compactSchema(v, opts);
     }
     return out;
   }
@@ -54,6 +70,12 @@ function compactSchema(node: unknown, dropMeta: boolean): unknown {
 function compactTool(tool: unknown, cfg: TSCConfig): unknown {
   if (!tool || typeof tool !== "object") return tool;
   const t = tool as Record<string, unknown>;
+  const opts: CompactOptions = {
+    dropMeta: cfg.dropSchemaMeta,
+    trimDescriptions: cfg.trimDescriptions,
+  };
+  // Either pass needs the schema walk, so skip it only when both are off.
+  const walkSchema = cfg.dropSchemaMeta || cfg.trimDescriptions;
 
   // OpenAI-flavor: { type: "function", function: { name, description, parameters } }
   if (t.type === "function" && t.function && typeof t.function === "object") {
@@ -61,8 +83,8 @@ function compactTool(tool: unknown, cfg: TSCConfig): unknown {
     if (cfg.trimDescriptions && typeof fn.description === "string") {
       fn.description = trimDescription(fn.description);
     }
-    if (cfg.dropSchemaMeta && fn.parameters !== undefined) {
-      fn.parameters = compactSchema(fn.parameters, true);
+    if (walkSchema && fn.parameters !== undefined) {
+      fn.parameters = compactSchema(fn.parameters, opts);
     }
     return { ...t, function: fn };
   }
@@ -72,8 +94,8 @@ function compactTool(tool: unknown, cfg: TSCConfig): unknown {
   if (cfg.trimDescriptions && typeof out.description === "string") {
     out.description = trimDescription(out.description);
   }
-  if (cfg.dropSchemaMeta && out.input_schema !== undefined) {
-    out.input_schema = compactSchema(out.input_schema, true);
+  if (walkSchema && out.input_schema !== undefined) {
+    out.input_schema = compactSchema(out.input_schema, opts);
   }
   return out;
 }

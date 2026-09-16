@@ -2,6 +2,7 @@ import {
   BaseProvider,
   type ChatCompletionRequest,
   type ChatCompletionResponse,
+  type ChatMessage,
   type ModelInfo,
   type ProviderHealthResult,
   type ProviderResult,
@@ -9,6 +10,7 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import { runSseStreamLoop } from "../stream-utils";
 
 
 /**
@@ -71,22 +73,54 @@ interface CodeBuddyTokens {
 //      or code 11217 (authorization_pending)
 // The "X-No-*" headers bypass the auth middleware (no token yet).
 // ============================================================================
-// Single source of truth for the CodeBuddy global API host (Cartethyia parity:
-// GLOBAL_BASE_URL = "https://www.codebuddy.ai/v2"). Call sites append "/v2/...".
-export const CODEBUDDY_BASE_URL = "https://www.codebuddy.ai";
+/**
+ * Candidate CodeBuddy global API hosts, in failover order. Both serve the
+ * identical /v2 API with the same credentials, so a host-level failure (DNS /
+ * TLS / connection / moved route) is recoverable by replaying the request
+ * against the peer. Index 0 is the host accounts are provisioned against and
+ * is what every NON-failover path keeps using (OAuth device flow, token
+ * refresh, billing, healthCheck).
+ *
+ * HONEST CEILING: both names currently resolve to the SAME A record
+ * (43.163.17.187), so this covers host/DNS/TLS/route failures only — it is NOT
+ * origin-outage redundancy. Call sites append "/v2/...", so no host may
+ * include an API version segment.
+ */
+export const CODEBUDDY_BASE_URLS = [
+  "https://www.workbuddy.ai",
+  // www, NOT the apex: codebuddy.ai has an expired TLS cert and 301s to www.
+  "https://www.codebuddy.ai",
+] as const;
+
+export const CODEBUDDY_PRIMARY_BASE_URL: string = CODEBUDDY_BASE_URLS[0];
+
+// Single source of truth for the CodeBuddy global API host (the primary).
+export const CODEBUDDY_BASE_URL: string = CODEBUDDY_PRIMARY_BASE_URL;
+
+/**
+ * Host-scoped upstream failures only: the peer host may still serve this
+ * account fine. 401/403 deliberately excluded — auth state is account-wide and
+ * those statuses drive the refresh-then-retry path. 400 (our malformed body)
+ * and 429 (per-account quota) are equally not host problems.
+ */
+export function shouldFailoverStatus(status: number): boolean {
+  return status >= 500 || status === 404 || status === 405;
+}
 
 export function resolveCodebuddyBaseUrl(): string {
   return CODEBUDDY_BASE_URL;
 }
 
 // Host for X-Domain, derived from the base URL above.
-// Falls back to the public host when the base URL is not http(s).
+// Falls back to the primary host, derived from the canonical URL so the
+// hostname has exactly one textual definition in this file.
 export function codebuddyDomain(baseUrl?: string): string {
+  const fallback = new URL(CODEBUDDY_PRIMARY_BASE_URL).hostname;
   try {
     const host = new URL(baseUrl ?? resolveCodebuddyBaseUrl()).hostname;
-    return host || "www.codebuddy.ai";
+    return host || fallback;
   } catch {
-    return "www.codebuddy.ai";
+    return fallback;
   }
 }
 
@@ -196,6 +230,10 @@ export async function refreshCodebuddyToken(refreshToken: string): Promise<{
       "X-Product": "SaaS",
     },
     body: "{}",
+    // Bound the auth round-trip. Same 15s budget the quota probes already use
+    // (config.providerQuotaTimeoutMs) — a refresh is the same class of short
+    // control-plane POST, and it runs inline inside a chat request's retry path.
+    signal: AbortSignal.timeout(config.providerQuotaTimeoutMs),
   });
 
   if (response.status === 401 || response.status === 403) {
@@ -275,6 +313,10 @@ export class CodeBuddyProvider extends BaseProvider {
   }
 
   private get baseUrl(): string { return resolveCodebuddyBaseUrl(); }
+
+  /** Candidate hosts tried in order by `requestWithFailover`. */
+  private readonly baseUrls: readonly string[] = CODEBUDDY_BASE_URLS;
+
   private resolveModel(model: string): string {
     // Strip -thinking suffix first for lookup, re-apply after
     const isThinking = model.endsWith("-thinking");
@@ -483,15 +525,17 @@ export class CodeBuddyProvider extends BaseProvider {
     try {
       // Always request as stream — CodeBuddy no longer supports non-stream responses.
       // We aggregate the stream into a single ChatCompletionResponse for the client.
-      const response = await this.makeRequest(tokens, request, true);
+      const response = await this.requestWithFailover(tokens, request, true);
 
       if (response.status === 401 || response.status === 403) {
         const refreshResult = await this.refreshToken(account);
         if (!refreshResult.success || !refreshResult.tokens) {
-          return { success: false, error: "Session expired, re-login required" };
+          // Propagate the refresh failure's own reason: a hung/unreachable auth
+          // endpoint must not be relabelled as a revoked session.
+          return { success: false, error: refreshResult.error ?? "Session expired, re-login required" };
         }
         const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyTokens;
-        const retryResponse = await this.makeRequest(newTokens, request, true);
+        const retryResponse = await this.requestWithFailover(newTokens, request, true);
         if (retryResponse.status === 401 || retryResponse.status === 403) {
           return { success: false, error: "Session expired, re-login required" };
         }
@@ -562,15 +606,15 @@ export class CodeBuddyProvider extends BaseProvider {
     }
 
     try {
-      const response = await this.makeRequest(tokens, request, true);
+      const response = await this.requestWithFailover(tokens, request, true);
 
       if (response.status === 401 || response.status === 403) {
         const refreshResult = await this.refreshToken(account);
         if (!refreshResult.success || !refreshResult.tokens) {
-          return { success: false, error: "Session expired, re-login required" };
+          return { success: false, error: refreshResult.error ?? "Session expired, re-login required" };
         }
         const newTokens = JSON.parse(refreshResult.tokens) as CodeBuddyTokens;
-        const retryResponse = await this.makeRequest(newTokens, request, true);
+        const retryResponse = await this.requestWithFailover(newTokens, request, true);
         if (retryResponse.status === 401 || retryResponse.status === 403) {
           return { success: false, error: "Session expired, re-login required" };
         }
@@ -627,6 +671,16 @@ export class CodeBuddyProvider extends BaseProvider {
         }),
       };
     } catch (err) {
+      // AbortSignal.timeout rejects with a TimeoutError DOMException whose text
+      // is not useful to an operator; name-check it so a dead auth endpoint
+      // reads as a transport failure and never as "re-login required".
+      const errName = (err as { name?: string } | null)?.name;
+      if (errName === "TimeoutError" || errName === "AbortError") {
+        return {
+          success: false,
+          error: `CodeBuddy token refresh timed out after ${config.providerQuotaTimeoutMs}ms — auth endpoint unreachable (session NOT revoked)`,
+        };
+      }
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
@@ -875,7 +929,8 @@ export class CodeBuddyProvider extends BaseProvider {
   private async makeRequest(
     tokens: CodeBuddyTokens,
     request: ChatCompletionRequest,
-    stream: boolean
+    stream: boolean,
+    baseUrl: string
   ): Promise<Response> {
     const headers: Record<string, string> = {
       "Accept": stream ? "text/event-stream, application/json, */*" : "application/json",
@@ -885,7 +940,7 @@ export class CodeBuddyProvider extends BaseProvider {
       "X-Conversation-Request-ID": crypto.randomUUID().replace(/-/g, ""),
       "X-Conversation-Message-ID": crypto.randomUUID().replace(/-/g, ""),
       "X-Request-ID": crypto.randomUUID().replace(/-/g, ""),
-      "X-Domain": codebuddyDomain(),
+      "X-Domain": codebuddyDomain(baseUrl),
       "X-Product": "SaaS",
       // Use browser-like User-Agent to avoid stricter content moderation for CLI/Agent traffic
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -1087,11 +1142,64 @@ export class CodeBuddyProvider extends BaseProvider {
     // can cause CodeBuddy to take > 2 minutes before the first token arrives.
     const timeoutMs = stream ? 300_000 : config.providerRequestTimeoutMs;
 
-    return this.fetchWithTimeout(`${this.baseUrl}/v2/chat/completions`, {
+    return this.fetchWithTimeout(`${baseUrl}/v2/chat/completions`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
     }, timeoutMs);
+  }
+
+  /**
+   * Try each candidate host until one answers with something that is not a
+   * host-scoped failure. Same credentials, same body — both hosts serve the
+   * identical /v2 API, so a connect/TLS/route failure on one is replayable on
+   * the peer.
+   *
+   * 401/403 deliberately do NOT fail over: auth state is account-wide, so the
+   * peer would answer identically and the switch would mask the
+   * refresh-then-retry path that actually recovers the session. Same for 400
+   * (our own malformed body) and 429 (quota is per-account, not per-host).
+   *
+   * ponytail: both hosts share one A record (43.163.17.187), so this is
+   * host/DNS/TLS/route cover, not origin-outage redundancy.
+   */
+  private async requestWithFailover(
+    tokens: CodeBuddyTokens,
+    request: ChatCompletionRequest,
+    stream: boolean
+  ): Promise<Response> {
+    for (let i = 0; i < this.baseUrls.length; i++) {
+      const baseUrl = this.baseUrls[i] as string;
+      const nextBaseUrl = this.baseUrls[i + 1];
+      const host = new URL(baseUrl).hostname;
+
+      let response: Response;
+      try {
+        response = await this.makeRequest(tokens, request, stream, baseUrl);
+      } catch (error) {
+        if (nextBaseUrl === undefined) throw error;
+        const reason = error instanceof Error ? error.message : String(error);
+        console.log(
+          `[CodeBuddy] ${host} failed (${reason}), retrying via ${new URL(nextBaseUrl).hostname}`
+        );
+        continue;
+      }
+
+      if (nextBaseUrl !== undefined && shouldFailoverStatus(response.status)) {
+        // Release the abandoned socket before switching hosts: this path exists
+        // for 5xx storms, and leaving each failed body undrained strands one
+        // keep-alive connection per attempt exactly when it matters most.
+        void response.body?.cancel().catch(() => {});
+        console.log(
+          `[CodeBuddy] ${host} failed (HTTP ${response.status}), retrying via ${new URL(nextBaseUrl).hostname}`
+        );
+        continue;
+      }
+
+      return response;
+    }
+
+    throw new Error("CodeBuddy: no candidate host available");
   }
 
   private async aggregateStreamResponse(response: Response, model: string): Promise<ChatCompletionResponse & { _realCredit?: number }> {
@@ -1235,193 +1343,101 @@ export class CodeBuddyProvider extends BaseProvider {
 
   private createStreamResponse(response: Response, model: string): ProviderResult {
     const id = this.generateId();
-    const encoder = new TextEncoder();
-    let capturedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    let capturedRealCredit: number | null = null; // Real credit from CodeBuddy usage.credit
+    // No byte for 5 minutes means a stalled upstream — generous enough that a
+    // healthy stream producing tokens is never cut off.
+    const STREAM_READ_TIMEOUT = 300_000;
 
-    const STREAM_READ_TIMEOUT = 300_000; // 5 minutes for the whole stream — generous for thinking models
+    // Set once a tool call is seen, so a later "stop" finish_reason can be
+    // corrected: clients read "stop" as "no more tool calls" and drop the call.
+    let hasToolCalls = false;
 
-    // Hoisted to the outer scope so both start() and cancel() can reach it.
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const stream = runSseStreamLoop({
+      response,
+      id,
+      model,
+      logPrefix: "[CodeBuddy]",
+      readTimeoutMs: STREAM_READ_TIMEOUT,
+      onEvent: (parsed) => {
+        const choice = parsed.choices?.[0];
+        const delta = choice?.delta || parsed.delta || {};
+        const deltaContent = delta.content || "";
 
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
-        if (!reader) { controller.close(); return; }
+        // CodeBuddy reports content moderation as ordinary delta content in
+        // Chinese. Forwarding it verbatim would show the user a provider-side
+        // notice, so replace it and stop the turn.
+        if (deltaContent.includes("敏感内容") || deltaContent.includes("系统检测到")) {
+          const notice = "Content moderation: Your input was flagged as potentially sensitive by the provider. This may be a false positive. Please try rephrasing your message or use a different model.";
+          return {
+            chunks: [
+              this.streamChunk(parsed.id || id, model, { content: notice }),
+              this.streamChunk(id, model, {}, "content_filter"),
+            ],
+            terminal: true,
+          };
+        }
 
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let contentModerationDetected = false;
-        let hasToolCalls = false;
-        let timedOut = false;
+        if (delta.tool_calls?.length) hasToolCalls = true;
 
-        // ONE idle watchdog for the stream, re-armed after every successful read —
-        // NOT a per-read Promise.race. A per-iteration `Promise.race([read(),
-        // timeout])` + clearTimeout leaves a never-settling pending Promise every
-        // loop pass; when the stream is wrapped (peekStreamForError + usage
-        // finalizer) and the upstream errors or the client disconnects, that pattern
-        // deadlocks/hangs Bun on Windows and can kill the etteum process. A single
-        // re-armed timer aborts the read cleanly and still means "idle for
-        // STREAM_READ_TIMEOUT" (e.g. a healthy cb-* stream that keeps producing
-        // tokens past 5 minutes is never cut off, only a genuinely stalled one is).
-        let watchdog = setTimeout(abortOnStall, STREAM_READ_TIMEOUT);
-        const rearm = () => {
-          clearTimeout(watchdog);
-          watchdog = setTimeout(abortOnStall, STREAM_READ_TIMEOUT);
+        let finishReason = choice?.finish_reason || null;
+        if (finishReason === "stop" && hasToolCalls) finishReason = "tool_calls";
+
+        const chunk: StreamChunk = {
+          id: parsed.id || id,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: choice?.index ?? 0, delta, finish_reason: finishReason }],
         };
+        if (parsed.usage) chunk.usage = parsed.usage;
 
-        function abortOnStall() {
-          timedOut = true;
-          try { void reader?.cancel(new Error("Stream read timeout"))?.catch(() => {}); } catch { /* already closed */ }
-        }
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            rearm();
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith("data:")) continue;
-              const data = trimmed.startsWith("data: ") ? trimmed.slice(6) : trimmed.slice(5);
-
-              if (data === "[DONE]") {
-                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                continue;
-              }
-
-              try {
-                const parsed = JSON.parse(data);
-                const choice = parsed.choices?.[0];
-                const delta = choice?.delta || parsed.delta || {};
-                const deltaContent = delta.content || "";
-
-                // Detect content moderation error in Chinese
-                if (deltaContent.includes("敏感内容") || deltaContent.includes("系统检测到")) {
-                  contentModerationDetected = true;
-                  const errorChunk: StreamChunk = {
-                    id, object: "chat.completion.chunk",
-                    created: Math.floor(Date.now() / 1000), model,
-                    choices: [{
-                      index: 0,
-                      delta: { content: "Content moderation: Your input was flagged as potentially sensitive by the provider. This may be a false positive. Please try rephrasing your message or use a different model." },
-                      finish_reason: null,
-                    }],
-                  };
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-                  const doneChunk: StreamChunk = {
-                    id, object: "chat.completion.chunk",
-                    created: Math.floor(Date.now() / 1000), model,
-                    choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
-                  };
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
-                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                  break;
-                }
-
-                // Track if we've seen tool calls
-                if (delta.tool_calls && delta.tool_calls.length > 0) {
-                  hasToolCalls = true;
-                }
-
-                // Fix finish_reason if we have tool calls
-                let finishReason = choice?.finish_reason || null;
-                if (finishReason === "stop" && hasToolCalls) {
-                  finishReason = "tool_calls";
-                }
-
-                // Forward the chunk with corrected finish_reason
-                const chunk: StreamChunk = {
-                  id: parsed.id || id,
-                  object: "chat.completion.chunk",
-                  created: Math.floor(Date.now() / 1000),
-                  model,
-                  choices: [{
-                    index: choice?.index ?? 0,
-                    delta,
-                    finish_reason: finishReason,
-                  }],
-                };
-
-                // Include usage if present and capture it
-                if (parsed.usage) {
-                  chunk.usage = parsed.usage;
-                  capturedUsage = {
-                    prompt_tokens: Number(parsed.usage.prompt_tokens || parsed.usage.input_tokens || capturedUsage.prompt_tokens || 0),
-                    completion_tokens: Number(parsed.usage.completion_tokens || parsed.usage.output_tokens || capturedUsage.completion_tokens || 0),
-                    total_tokens: Number(parsed.usage.total_tokens || capturedUsage.total_tokens || 0),
-                  };
-                  // Capture real credit from CodeBuddy's usage.credit field
-                  if (parsed.usage.credit != null && Number(parsed.usage.credit) > 0) {
-                    capturedRealCredit = Number(parsed.usage.credit);
-                  }
-                }
-
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-              } catch (parseError) {
-                // Skip malformed chunks but continue streaming
-                console.error("[CodeBuddy] Failed to parse chunk:", parseError);
-              }
-            }
-
-            if (contentModerationDetected) break;
-          }
-        } catch (error) {
-          const errMsg = error instanceof Error ? error.message : String(error);
-          // Watchdog fired: the upstream stalled with no bytes for the whole
-          // STREAM_READ_TIMEOUT — surface a clean stream error and stop, instead
-          // of appending a bogus content delta to a host that already hung.
-          if (timedOut) {
-            try { controller.error(new Error(errMsg)); } catch { /* already closed */ }
-            return;
-          }
-          console.error("[CodeBuddy] Stream error:", errMsg);
-          // Send an error chunk to the client so it knows what happened
-          try {
-            const errorChunk: StreamChunk = {
-              id, object: "chat.completion.chunk",
-              created: Math.floor(Date.now() / 1000), model,
-              choices: [{
-                index: 0,
-                delta: { content: `\n\n[Stream error: ${errMsg}]` },
-                finish_reason: null,
-              }],
-            };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          } catch {
-            // Controller may already be closed
-          }
-        } finally {
-          clearTimeout(watchdog);
-          try { controller.close(); } catch { /* already closed */ }
-        }
+        return {
+          chunks: [chunk],
+          content: deltaContent,
+          toolCalls: Boolean(delta.tool_calls?.length),
+        };
       },
-      // Abort the upstream reader when the consumer (client, or the peek/usage
-      // finalizer wrapper) cancels this stream. Without this, response.body keeps
-      // being read in the background while the producer loop dangles after a
-      // disconnect/error — leaking the reader and hanging the Bun event loop.
-      async cancel(reason) {
-        try { await reader?.cancel(reason); } catch { /* already closed */ }
+      onPlainJson: (parsed) => {
+        const choice = parsed.choices?.[0];
+        const content = this.extractDeltaContent(parsed, choice);
+        if (!content) return {};
+        const chunk: StreamChunk = {
+          id: parsed.id || id,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: choice?.index ?? 0, delta: { content }, finish_reason: choice?.finish_reason || null }],
+        };
+        if (parsed.usage) chunk.usage = parsed.usage;
+        return { chunks: [chunk], content };
       },
     });
 
     return {
       success: true,
       stream,
-      tokensUsed: capturedUsage.total_tokens,
-      promptTokens: capturedUsage.prompt_tokens,
-      completionTokens: capturedUsage.completion_tokens,
-      // Note: For streaming, the real credit is captured by the stream finalizer in index.ts
-      // via extractUsageFromSsePayload() which reads usage.credit from the last SSE chunk.
-      // These fallback values are used only if the finalizer doesn't find usage in the stream.
+      // A streaming turn's usage is finalized from the SSE stream by the wrapper
+      // in proxy/index.ts, so there is nothing to report here yet.
+      tokensUsed: 0,
+      promptTokens: 0,
+      completionTokens: 0,
       creditsUsed: 0,
       creditSource: "estimated" as const,
+    };
+  }
+
+  /** One `chat.completion.chunk` frame with the provider's id/created stamp. */
+  private streamChunk(
+    id: string,
+    model: string,
+    delta: Partial<ChatMessage> & { tool_calls?: any[] },
+    finishReason: string | null = null
+  ): StreamChunk {
+    return {
+      id,
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
     };
   }
 }

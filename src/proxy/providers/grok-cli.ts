@@ -7,6 +7,7 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import { SSE_DONE_SENTINEL, releaseReader } from "../stream-utils";
 
 /**
  * Grok CLI / Grok Build — port of 9router `grok-cli` (device-code OAuth).
@@ -317,6 +318,7 @@ export class GrokCliProvider extends BaseProvider {
       let outputTokens = 0;
       let upstreamCredits: number | null = null;
       const toolCallsByIndex = new Map<number, PendingToolCall>();
+      let reachedDone = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -332,7 +334,13 @@ export class GrokCliProvider extends BaseProvider {
             if (line.startsWith("data: ")) dataLine += line.slice(6);
             else if (line.startsWith("data:")) dataLine += line.slice(5);
           }
-          if (!dataLine || dataLine === "[DONE]") continue;
+          if (!dataLine) continue;
+          if (dataLine === SSE_DONE_SENTINEL) {
+            // Payload complete — stop reading rather than wait for the upstream
+            // to close a socket it may hold open indefinitely.
+            reachedDone = true;
+            break;
+          }
           try {
             const obj = JSON.parse(dataLine);
             const t = obj.type || "";
@@ -383,7 +391,10 @@ export class GrokCliProvider extends BaseProvider {
             /* skip */
           }
         }
+        if (reachedDone) break;
       }
+
+      if (reachedDone) await releaseReader(reader);
 
       const promptTokens = inputTokens || this.estimateMessagesTokens(request.messages);
       const completionTokens = outputTokens || this.estimateTokens(text);
@@ -504,7 +515,17 @@ export class GrokCliProvider extends BaseProvider {
                   if (line.startsWith("data: ")) dataLine += line.slice(6);
                   else if (line.startsWith("data:")) dataLine += line.slice(5);
                 }
-                if (!dataLine || dataLine === "[DONE]") continue;
+                if (!dataLine) continue;
+                if (dataLine === SSE_DONE_SENTINEL) {
+                  // Terminal: the payload is complete. The upstream may hold the
+                  // socket open, so stop reading and finish the response.
+                  if (!started) emit({ role: "assistant" });
+                  emit({}, hasToolCalls ? "tool_calls" : "stop");
+                  controller.enqueue(encoder.encode(`data: ${SSE_DONE_SENTINEL}\n\n`));
+                  controller.close();
+                  await releaseReader(reader);
+                  return;
+                }
                 try {
                   const obj = JSON.parse(dataLine);
                   const t = obj.type || "";

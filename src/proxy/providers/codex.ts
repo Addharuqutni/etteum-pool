@@ -7,6 +7,7 @@ import {
 } from "./base";
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
+import { SSE_DONE_SENTINEL, releaseReader } from "../stream-utils";
 
 interface CodexTokens {
   access_token: string;
@@ -421,6 +422,7 @@ export class CodexProvider extends BaseProvider {
       let outputTokens = 0;
       const toolCallsByIndex = new Map<number, PendingToolCall>();
       const reasoningByOutput = new Map<number, string>();
+      let reachedDone = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -433,7 +435,14 @@ export class CodexProvider extends BaseProvider {
           buffer = buffer.slice(idx + sseBoundaryLength(buffer, idx));
 
           const dataLine = extractSseData(event);
-          if (!dataLine || dataLine === "[DONE]") continue;
+          if (!dataLine) continue;
+          if (dataLine === SSE_DONE_SENTINEL) {
+            // The payload is complete; stop reading instead of waiting for the
+            // upstream to close a socket it may hold open indefinitely. The
+            // reader is released outside the loop so this only signals the stop.
+            reachedDone = true;
+            break;
+          }
 
           try {
             const obj = JSON.parse(dataLine);
@@ -490,8 +499,10 @@ export class CodexProvider extends BaseProvider {
             }
           } catch { /* skip malformed */ }
         }
+        if (reachedDone) break;
       }
 
+      if (reachedDone) await releaseReader(reader);
       const promptTokens = inputTokens || this.estimateMessagesTokens(request.messages);
       const completionTokens = outputTokens || this.estimateTokens(text);
       const toolCalls = this.toolCallsFromMap(toolCallsByIndex);
@@ -625,7 +636,17 @@ export class CodexProvider extends BaseProvider {
                 buffer = buffer.slice(idx + sseBoundaryLength(buffer, idx));
 
                 const dataLine = extractSseData(event);
-                if (!dataLine || dataLine === "[DONE]") continue;
+                if (!dataLine) continue;
+                if (dataLine === SSE_DONE_SENTINEL) {
+                  // Terminal: stop reading. The upstream may hold the socket
+                  // open after the payload ends, which previously left the
+                  // request hanging until the consumer gave up. Releasing the
+                  // reader also cancels that connection instead of leaking it.
+                  controller.enqueue(encoder.encode(`data: ${SSE_DONE_SENTINEL}\n\n`));
+                  controller.close();
+                  await releaseReader(reader);
+                  return;
+                }
 
                 try {
                   const obj = JSON.parse(dataLine);

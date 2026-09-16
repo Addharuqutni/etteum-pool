@@ -1,14 +1,32 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { Search, RefreshCw, X } from "lucide-react";
+import { Search, RefreshCw, X, SlidersHorizontal, Trash2, Pause, Play, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import PageHeader from "@/components/layout/PageHeader";
-import { fetchRequests, fetchRequestDetail } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  fetchRequests,
+  fetchRequestDetail,
+  deleteRequestLogs,
+  fetchSettings,
+  updateSettings,
+  fetchProviderList,
+  type RequestLogListResponse,
+} from "@/lib/api";
 import { formatDateTimeID } from "@/lib/utils";
 import { useWsEvent } from "@/hooks/useWebSocket";
+import { useTimedMessage } from "@/hooks/useTimedMessage";
+import { useApi } from "@/hooks/useApi";
 
 interface RequestLog {
   id: number;
@@ -78,21 +96,103 @@ function getStatusColor(status: string): "success" | "warning" | "error" {
   return "error";
 }
 
-function labelProvider(provider: string) {
-  if (provider === "codebuddy") return "CodeBuddy";
-  if (provider === "codebuddy-china") return "CodeBuddy CN";
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
+/** Wire id -> display name, as in Settings.tsx. */
+const PROVIDER_LABELS: Record<string, string> = {
+  codebuddy: "CodeBuddy",
+  "codebuddy-china": "CodeBuddy (China)",
+  canva: "Canva",
+  codex: "Codex",
+  "grok-cli": "Grok CLI",
+  claude: "Claude",
+  byok: "BYOK",
+  antigravity: "Antigravity",
+};
+
+const PER_PAGE_OPTIONS = [15, 25, 50, 100];
+
+const PER_PAGE_STORAGE_KEY = "requests_per_page";
+const LIVE_BUFFER_LIMIT = 500;
+const EXPORT_ROW_LIMIT = 500;
+
+const LOG_SETTING_DEFAULTS: Record<string, string> = {
+  request_log_body_enabled: "true",
+  request_log_body_redact: "true",
+  request_log_body_max_bytes: "65536",
+  request_log_max_records: "500",
+  request_log_retention_days: "0",
+};
+
+const RETENTION_OPTIONS = [
+  { value: "0", label: "Selamanya" },
+  { value: "3", label: "3 hari" },
+  { value: "7", label: "7 hari" },
+  { value: "14", label: "14 hari" },
+  { value: "30", label: "30 hari" },
+];
+
+function labelProvider(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
+
+function readStoredPerPage(): number {
+  const stored = Number(localStorage.getItem(PER_PAGE_STORAGE_KEY));
+  return PER_PAGE_OPTIONS.includes(stored) ? stored : 25;
+}
+
+/** Readable text for a log body that may be null, a string, or an object. */
+function formatBody(value: unknown): string {
+  if (value === undefined || value === null) return "null";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+/**
+ * True when a row would survive the active server-side filters. Mirrors the
+ * GET /api/stats/requests semantics (LIKE over model/provider/errorMessage/
+ * accountEmail) so live WS rows and the buffered resume cannot leak rows the
+ * current filter would exclude.
+ */
+function matchesActiveFilters(req: RequestLog, provider: string, status: string, search: string): boolean {
+  if (provider !== "all" && req.provider !== provider) return false;
+  if (status !== "all" && req.status !== status) return false;
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    req.model?.toLowerCase().includes(q) ||
+    req.provider.toLowerCase().includes(q) ||
+    (req.errorMessage || "").toLowerCase().includes(q) ||
+    (req.accountEmail || "").toLowerCase().includes(q)
+  );
 }
 
 export default function Requests() {
+  // Provider list comes from the registry (`/api/settings/providers` ->
+  // config.providers), never a local copy.
+  const providerListApi = useApi(() => fetchProviderList(), []);
+  const providerOptions = useMemo(
+    () => (providerListApi.data?.data || []).filter((p) => p !== "all"),
+    [providerListApi.data]
+  );
+
   const [logs, setLogs] = useState<RequestLog[]>([]);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [provider, setProvider] = useState("all");
+  const [status, setStatus] = useState("all");
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<RequestLog | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [page, setPage] = useState(1);
-  const perPage = 25;
+  const [perPage, setPerPage] = useState(readStoredPerPage);
+  const [total, setTotal] = useState(0);
+  const [livePaused, setLivePaused] = useState(false);
+  const [liveBuffer, setLiveBuffer] = useState<RequestLog[]>([]);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configForm, setConfigForm] = useState<Record<string, string>>({ ...LOG_SETTING_DEFAULTS });
+  const [configSaving, setConfigSaving] = useState(false);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const { message: configMessage, setMessage: setConfigMessage } = useTimedMessage<string>(null, 3500);
 
   /**
    * Open the detail drawer for a row. The list endpoint omits the heavy
@@ -119,47 +219,169 @@ export default function Requests() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetchRequests(1, 100, provider) as { data: RequestLog[] };
-      setLogs(res.data || []);
+      const res = (await fetchRequests(page, perPage, provider, status, debouncedSearch)) as RequestLogListResponse;
+      setLogs((res.data as RequestLog[]) || []);
+      setTotal(res.total || 0);
     } catch {
       setLogs([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
   }
 
+  // Debounce the search box so typing does not fire a request per keystroke.
+  // Reset to page 1 here so the debounce render carries the new page with it.
   useEffect(() => {
-    load();
-    setPage(1);
-  }, [provider]);
-
-  useEffect(() => {
-    setPage(1);
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
   }, [search]);
 
+  // Filter/page-size changes reset to page 1 in their own handlers (below);
+  // this effect only loads when any of the query inputs actually changed.
+  // `page` is included so Next/Prev refetch at the new offset.
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, perPage, provider, status, debouncedSearch]);
+
   useWsEvent(["request_log"], (msg) => {
-    if (msg.type === "request_log") {
-      setLogs((current) => [msg.data as RequestLog, ...current].slice(0, 100));
+    if (msg.type !== "request_log") return;
+    const incoming = msg.data as RequestLog;
+    if (livePaused) {
+      // Buffer everything while paused; filters may change before resume, so
+      // matching happens at merge time with the then-current filters.
+      setLiveBuffer((buffer) => [incoming, ...buffer].slice(0, LIVE_BUFFER_LIMIT));
+      return;
     }
+    // Live rows must respect the active filters, or a filtered view silently
+    // accumulates non-matching rows (and an inflated total).
+    if (!matchesActiveFilters(incoming, provider, status, debouncedSearch)) return;
+    setLogs((current) => [incoming, ...current].slice(0, perPage));
+    setTotal((current) => current + 1);
   });
 
-  const filtered = logs.filter((req) => {
-    const q = search.toLowerCase();
-    return (
-      req.model?.toLowerCase().includes(q) ||
-      req.provider.toLowerCase().includes(q) ||
-      req.errorMessage?.toLowerCase().includes(q) ||
-      String(req.accountId || "").includes(q)
-    );
-  });
+  function resumeLive() {
+    // Only rows that match the filters at resume time are merged in; rows
+    // buffered under a different filter stay out.
+    const matching = liveBuffer.filter((req) => matchesActiveFilters(req, provider, status, debouncedSearch));
+    setLogs((current) => {
+      const merged = [...matching, ...current];
+      const seen = new Set<number>();
+      const deduped = merged.filter((req) => {
+        if (seen.has(req.id)) return false;
+        seen.add(req.id);
+        return true;
+      });
+      return deduped.slice(0, perPage);
+    });
+    setTotal((current) => current + matching.length);
+    setLiveBuffer([]);
+    setLivePaused(false);
+  }
 
-  const errCount = filtered.filter((req) => req.status !== "success").length;
+  function changePerPage(next: number) {
+    setPerPage(next);
+    setPage(1);
+    localStorage.setItem(PER_PAGE_STORAGE_KEY, String(next));
+  }
+
+  function changeProvider(next: string) {
+    setProvider(next);
+    setPage(1);
+  }
+
+  function changeStatus(next: string) {
+    setStatus(next);
+    setPage(1);
+  }
+
+  async function openConfig() {
+    setConfigOpen(true);
+    setConfigMessage(null);
+    try {
+      const res = (await fetchSettings()) as { data?: Record<string, string | null> };
+      const stored = res?.data || {};
+      const seeded: Record<string, string> = { ...LOG_SETTING_DEFAULTS };
+      for (const key of Object.keys(LOG_SETTING_DEFAULTS)) {
+        const value = stored[key];
+        if (value !== undefined && value !== null) seeded[key] = value;
+      }
+      setConfigForm(seeded);
+    } catch {
+      setConfigForm({ ...LOG_SETTING_DEFAULTS });
+    }
+  }
+
+  function setConfigValue(key: string, value: string) {
+    setConfigForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function saveConfig() {
+    setConfigSaving(true);
+    try {
+      await updateSettings(configForm);
+      setConfigMessage("Settings saved.");
+      setConfigOpen(false);
+      await load();
+    } catch (err) {
+      setConfigMessage(err instanceof Error ? err.message : "Failed to save settings.");
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  async function pruneByRetention() {
+    try {
+      const res = await deleteRequestLogs({ olderThanDays: "retention" });
+      setConfigMessage(`Deleted ${res?.deletedCount ?? 0} log(s).`);
+      await load();
+    } catch (err) {
+      setConfigMessage(err instanceof Error ? err.message : "Failed to prune logs.");
+    }
+  }
+
+  async function clearAllLogs() {
+    try {
+      const res = await deleteRequestLogs({ all: true });
+      setConfigMessage(`Deleted ${res?.deletedCount ?? 0} log(s).`);
+      setConfirmClearAll(false);
+      setPage(1);
+      await load();
+    } catch (err) {
+      setConfigMessage(err instanceof Error ? err.message : "Failed to clear logs.");
+    }
+  }
+
+  async function exportJson() {
+    setExporting(true);
+    try {
+      const res = (await fetchRequests(1, EXPORT_ROW_LIMIT, provider, status, debouncedSearch)) as RequestLogListResponse;
+      const blob = new Blob([JSON.stringify(res.data || [], null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `requests-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setConfigMessage(err instanceof Error ? err.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const errCount = useMemo(() => logs.filter((req) => req.status !== "success").length, [logs]);
+  const pageCount = Math.max(1, Math.ceil(total / perPage));
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Requests"
-        meta={`${filtered.length} of ${logs.length} loaded${errCount > 0 ? ` · ${errCount} error` : ""}`}
+        meta={`${total} requests${errCount > 0 ? ` · ${errCount} error` : ""}`}
         actions={
           <>
             <div className="relative">
@@ -167,21 +389,74 @@ export default function Requests() {
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="model, account, error…"
-                className="w-full pl-8 font-mono sm:w-64"
+                placeholder="model, provider, error, account…"
+                className="w-full pl-8 font-mono sm:w-56"
                 aria-label="Filter requests"
               />
             </div>
             <Select
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
+              onChange={(e) => changeProvider(e.target.value)}
               className="w-auto font-mono text-[12px]"
               aria-label="Filter by provider"
             >
               <option value="all">all providers</option>
-              <option value="codebuddy">codebuddy</option>
-              <option value="canva">canva</option>
+              {providerOptions.map((option) => (
+                <option key={option} value={option}>
+                  {labelProvider(option)}
+                </option>
+              ))}
             </Select>
+            <Select
+              value={status}
+              onChange={(e) => changeStatus(e.target.value)}
+              className="w-auto font-mono text-[12px]"
+              aria-label="Filter by status"
+            >
+              <option value="all">All statuses</option>
+              <option value="success">Success</option>
+              <option value="error">Error</option>
+            </Select>
+            <Select
+              value={String(perPage)}
+              onChange={(e) => changePerPage(Number(e.target.value))}
+              className="w-auto font-mono text-[12px]"
+              aria-label="Rows per page"
+            >
+              {PER_PAGE_OPTIONS.map((option) => (
+                <option key={option} value={String(option)}>
+                  {option} / page
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant={livePaused ? "outline" : "ghost"}
+              size="sm"
+              onClick={() => (livePaused ? resumeLive() : setLivePaused(true))}
+              title={livePaused ? "Resume live updates" : "Pause live updates"}
+            >
+              {livePaused ? (
+                <>
+                  <Play className="w-3.5 h-3.5" /> Resume{liveBuffer.length > 0 ? ` (+${liveBuffer.length})` : ""}
+                </>
+              ) : (
+                <>
+                  <Pause className="w-3.5 h-3.5" /> Live
+                </>
+              )}
+            </Button>
+            <Button variant="outline" size="sm" onClick={openConfig}>
+              <SlidersHorizontal className="w-3.5 h-3.5" /> Configure
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={exportJson}
+              disabled={exporting}
+              title={`Export up to ${EXPORT_ROW_LIMIT} matching rows`}
+            >
+              <Download className="w-3.5 h-3.5" /> Export JSON
+            </Button>
             <Button variant="outline" size="sm" onClick={load} disabled={loading}>
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Reload
             </Button>
@@ -207,7 +482,7 @@ export default function Requests() {
               </tr>
             </thead>
             <tbody>
-              {filtered.slice((page - 1) * perPage, page * perPage).map((req) => (
+              {logs.map((req) => (
                 <tr
                   key={req.id}
                   onClick={() => openDetail(req)}
@@ -223,25 +498,27 @@ export default function Requests() {
                   <td className="max-w-[200px] truncate px-4 py-2 text-[var(--muted-foreground)] hidden lg:table-cell">{req.accountEmail || (req.accountId ? `#${req.accountId}` : "—")}</td>
                 </tr>
               ))}
-              {!loading && filtered.length === 0 && (
+              {!loading && logs.length === 0 && (
                 <tr>
                   <td colSpan={8} className="border-t border-[var(--hairline)] px-4 py-3 text-[var(--muted-foreground)]">
-                    {logs.length === 0 ? "No requests logged yet — traffic appears here as it is proxied." : "No rows match this filter."}
+                    {provider === "all" && status === "all" && !debouncedSearch
+                      ? "No requests logged yet — traffic appears here as it is proxied."
+                      : "No rows match this filter."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-        {filtered.length > perPage && (
+        {total > 0 && (
           <div className="flex items-center justify-between border-t border-[var(--border)] px-3 py-2">
             <p className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
-              {(page - 1) * perPage + 1}–{Math.min(page * perPage, filtered.length)} of {filtered.length}
+              {(page - 1) * perPage + 1}–{Math.min(page * perPage, total)} of {total}
             </p>
             <div className="flex items-center gap-1.5">
               <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(filtered.length / perPage)}</span>
-              <Button variant="ghost" size="sm" disabled={page >= Math.ceil(filtered.length / perPage)} onClick={() => setPage(page + 1)}>Next</Button>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{pageCount}</span>
+              <Button variant="ghost" size="sm" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</Button>
             </div>
           </div>
         )}
@@ -261,6 +538,13 @@ export default function Requests() {
                 <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
                   #{selected.id} · {formatDateTimeID(selected.createdAt)}
                 </p>
+                <button
+                  className="mt-1 font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)]"
+                  onClick={() => navigator.clipboard.writeText(formatBody(selected))}
+                  title="Copy the full log payload as JSON"
+                >
+                  Copy JSON
+                </button>
               </div>
               <button
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
@@ -331,6 +615,160 @@ export default function Requests() {
           </aside>
         </div>
       )}
+
+      <Dialog open={configOpen} onOpenChange={setConfigOpen}>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+          <DialogHeader className="space-y-1">
+            <DialogTitle>Konfigurasi Logs & Storage</DialogTitle>
+            <DialogDescription>
+              Disimpan di tabel <code>settings</code>, berlaku untuk semua client.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-3 space-y-4">
+            <section className="rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="eyebrow">Log Storage & Telemetry</p>
+
+              <label className="mt-2.5 flex cursor-pointer items-center justify-between gap-3">
+                <span className="font-mono text-[11px] text-[var(--foreground)]">Simpan Request & Response Body</span>
+                <input
+                  type="checkbox"
+                  className="accent-[var(--primary)]"
+                  checked={configForm.request_log_body_enabled === "true"}
+                  onChange={(e) => setConfigValue("request_log_body_enabled", e.target.checked ? "true" : "false")}
+                />
+              </label>
+
+              <label className="mt-2 flex cursor-pointer items-center justify-between gap-3">
+                <span className="font-mono text-[11px] text-[var(--foreground)]">Redaksi Data Sensitif</span>
+                <input
+                  type="checkbox"
+                  className="accent-[var(--primary)]"
+                  checked={configForm.request_log_body_redact === "true"}
+                  onChange={(e) => setConfigValue("request_log_body_redact", e.target.checked ? "true" : "false")}
+                />
+              </label>
+
+              <div className="mt-2.5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="eyebrow">Ukuran Maksimum Body</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10485760}
+                    value={configForm.request_log_body_max_bytes}
+                    onChange={(e) => setConfigValue("request_log_body_max_bytes", e.target.value)}
+                    className="mt-1.5 font-mono tabular-nums"
+                  />
+                  <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                    Byte. Default: <code>65536</code>.
+                  </p>
+                </div>
+                <div>
+                  <label className="eyebrow">Maksimal Log Tersimpan</label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1000000}
+                    value={configForm.request_log_max_records}
+                    onChange={(e) => setConfigValue("request_log_max_records", e.target.value)}
+                    className="mt-1.5 font-mono tabular-nums"
+                  />
+                  <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                    Default: <code>500</code>. <code>0</code> = tanpa batas.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-2.5">
+                <label className="eyebrow">Retensi Hari</label>
+                <Select
+                  value={configForm.request_log_retention_days}
+                  onChange={(e) => setConfigValue("request_log_retention_days", e.target.value)}
+                  className="mt-1.5 font-mono text-[12px]"
+                  aria-label="Retensi hari"
+                >
+                  {RETENTION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                  <code>Selamanya</code> = simpan tanpa batas waktu.
+                </p>
+              </div>
+            </section>
+
+            <section className="rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="eyebrow">Pemeliharaan</p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={pruneByRetention}>
+                  <Trash2 className="w-3.5 h-3.5" /> Pangkas Log Lama
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setConfirmClearAll(true)}>
+                  <Trash2 className="w-3.5 h-3.5" /> Bersihkan Semua Log
+                </Button>
+              </div>
+              <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                Pangkas mengikuti retensi tersimpan; bersihkan menghapus seluruh isi.
+              </p>
+            </section>
+
+            <section className="rounded-md border border-[var(--hairline)] px-3 py-2.5">
+              <p className="eyebrow">Preferensi Tampilan</p>
+              <div className="mt-2.5">
+                <label className="eyebrow">Baris per halaman</label>
+                <Select
+                  value={String(perPage)}
+                  onChange={(e) => changePerPage(Number(e.target.value))}
+                  className="mt-1.5 font-mono text-[12px]"
+                  aria-label="Baris per halaman"
+                >
+                  {PER_PAGE_OPTIONS.map((option) => (
+                    <option key={option} value={String(option)}>
+                      {option} / page
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                  Disimpan di peramban ini.
+                </p>
+              </div>
+            </section>
+
+            {configMessage && <p className="font-mono text-[11px] text-[var(--primary)]">{configMessage}</p>}
+          </div>
+
+          <DialogFooter className="mt-4 gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setConfigOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={saveConfig} disabled={configSaving}>
+              {configSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null} Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmClearAll} onOpenChange={setConfirmClearAll}>
+        <DialogContent className="max-w-md">
+          <DialogHeader className="space-y-1">
+            <DialogTitle>Bersihkan semua log?</DialogTitle>
+            <DialogDescription>
+              Seluruh isi tabel <code>request_logs</code> akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-4 gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setConfirmClearAll(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={clearAllLogs}>
+              <Trash2 className="w-3.5 h-3.5" /> Hapus semua
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -558,7 +996,7 @@ function PonytailPanel({
 }
 
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
-  const text = JSON.stringify(value || {}, null, 2);
+  const text = formatBody(value);
   return (
     <div className="mt-4">
       <div className="mb-1.5 flex items-center justify-between">

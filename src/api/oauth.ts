@@ -640,7 +640,7 @@ oauthRouter.post("/grok-cli/cancel", async (c) => {
 });
 
 /**
- * CodeBuddy global (www.codebuddy.ai) — device_code OAuth, ported from 9router codebuddy-intl.
+ * CodeBuddy global (www.workbuddy.ai) — device_code OAuth, ported from 9router codebuddy-intl.
  * GET  /api/oauth/codebuddy/device-code
  * POST /api/oauth/codebuddy/poll   body: { state }
  * POST /api/oauth/codebuddy/cancel body: { state }

@@ -99,8 +99,18 @@ class AccountPool {
    */
   async getNextAccount(provider: ProviderName, excludeAccountIds: Set<number> = new Set()): Promise<Account | null> {
     const cooldownIds = this.getCooldownAccountIds();
-    const activeAccounts = (await this.getActiveAccounts(provider))
-      .filter((account) => !excludeAccountIds.has(account.id) && !cooldownIds.has(account.id));
+    const eligible = (await this.getActiveAccounts(provider)).filter(
+      (account) => !excludeAccountIds.has(account.id)
+    );
+    // Prefer accounts that are NOT in a 429 cooldown, but fall back to cooled
+    // ones when that would otherwise leave nothing. Dropping them entirely
+    // silently removed a configured combo target from the chain, so the user's
+    // order stopped being honored (a cooled account looks "unavailable", not
+    // "tried and failed"). Retrying one costs a single request; skipping it
+    // costs the whole target.
+    const activeAccounts = eligible.length > 0 && eligible.every((a) => cooldownIds.has(a.id))
+      ? eligible
+      : eligible.filter((account) => !cooldownIds.has(account.id));
 
     if (activeAccounts.length === 0) {
       try {
@@ -256,12 +266,22 @@ class AccountPool {
       const byokProvider = getByokProvider();
       const prefix = byokProvider.findPrefixForModel(model);
       const byokExclusions = new Set<number>(options.excludeAccountIds || []);
+      // Prefer non-cooled accounts; retry cooled ones LAST rather than
+      // dropping them, so a configured combo target is still attempted
+      // instead of vanishing from the chain after one 429.
       for (const id of this.getCooldownAccountIds()) byokExclusions.add(id);
-      const account = await byokProvider.findAccountForModel(model, {
+      let account = await byokProvider.findAccountForModel(model, {
         excludeAccountIds: byokExclusions,
         loadBalancingMethod: prefix ? await this.getByokLoadBalancingMethod(prefix) : await this.getLoadBalancingMethod("byok"),
         getInFlightCount: (accountId) => this.getInFlightCount(accountId),
       });
+      if (!account) {
+        account = await byokProvider.findAccountForModel(model, {
+          excludeAccountIds: new Set<number>(options.excludeAccountIds || []),
+          loadBalancingMethod: prefix ? await this.getByokLoadBalancingMethod(prefix) : await this.getLoadBalancingMethod("byok"),
+          getInFlightCount: (accountId) => this.getInFlightCount(accountId),
+        });
+      }
       if (!account) {
         console.warn(
           `[Pool] No BYOK account available for model "${model}" ` +
@@ -416,14 +436,29 @@ class AccountPool {
   }
 
   /**
-   * Update account tokens (stored as jsonb)
+   * Update account tokens (stored as jsonb).
+   *
+   * Providers hand tokens back either as an object or as a JSON string (the
+   * `refreshToken` contract returns a string). The column is JSON, so writing a
+   * string verbatim would double-encode it — the row would then read back as a
+   * string rather than an object, and the provider's credential parser would be
+   * handed `"{\"accessToken\":...}"` instead of the credential. Parse strings
+   * here so both call shapes land as one JSON object.
    */
   async updateTokens(accountId: number, tokens: unknown): Promise<void> {
     try {
+      let value = tokens;
+      if (typeof value === "string") {
+        try {
+          value = JSON.parse(value);
+        } catch {
+          // Not JSON — store as-is rather than throwing away the value.
+        }
+      }
       await db
         .update(accounts)
         .set({
-          tokens,
+          tokens: value,
           updatedAt: new Date(),
         })
         .where(eq(accounts.id, accountId));

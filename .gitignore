@@ -63,6 +63,19 @@ data/
 *.sqlite-wal
 *.sqlite-shm
 
+# Local recovery / DB backups - holds live account tokens; must never be committed
+.recovery/
+*.db.bak
+*.db-wal.bak
+*.db-shm.bak
+
+# Agent scratch dirs
+tmp-verify/
+.omp/
+
+# npm lockfile (project uses Bun)
+package-lock.json
+
 # Drizzle migrations
 drizzle/
 

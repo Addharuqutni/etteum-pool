@@ -1010,7 +1010,7 @@ accountsRouter.post("/", async (c) => {
 
   // ── CodeBuddy Global: Single API key flow (ck_...) ───────────────────
   // Accept a single API key, validate format, and create one account with
-  // an auto-generated email label. Host: www.codebuddy.ai.
+  // an auto-generated email label. Host: www.workbuddy.ai.
   if (body.provider === "codebuddy" && body.apiKey) {
     const key = body.apiKey.trim();
     if (!key) return c.json({ error: "apiKey is empty" }, 400);

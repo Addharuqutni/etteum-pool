@@ -33,7 +33,10 @@ export const config = {
   logBodyMaxBytes: Number(process.env.POOLPROX_LOG_BODY_MAX_BYTES) || 65536,
   // Bounded request protections (defaults: 10MB body, 256MB stream, no global cap).
   maxBodyBytes: Number(process.env.POOLPROX_MAX_BODY_BYTES) || 10 * 1024 * 1024,
-  maxStreamBytes: Number(process.env.POOLPROX_MAX_STREAM_BYTES) || 256 * 1024 * 1024,
+  // 32MB downstream per stream is plenty for a chat response and keeps the
+  // retained-chunk buffer far below the point where Bun's Windows VM memo-faults.
+  // 256MB previously let a single oversized stream push RSS toward the OOM kill.
+  maxStreamBytes: Number(process.env.POOLPROX_MAX_STREAM_BYTES) || 32 * 1024 * 1024,
   maxConcurrentRequests: Number(process.env.POOLPROX_MAX_CONCURRENT_REQUESTS) || 0, // 0 = unlimited (memory-adaptive caps in middleware)
   accountCacheTtlMs: Number(process.env.POOLPROX_ACCOUNT_CACHE_TTL_MS) || 3000,
   authProcessTimeoutMs: Number(process.env.POOLPROX_AUTH_PROCESS_TIMEOUT_MS) || 10 * 60 * 1000,

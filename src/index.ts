@@ -35,6 +35,27 @@ process.on("unhandledRejection", (reason) => {
   process.exit(1);
 });
 
+// Memory watchdog: exit CLEANLY (so production.ts can restart just the backend)
+// before RSS reaches the point where Windows' low-memory killer takes down the
+// whole process tree with no trace. Bun's reported RSS well exceeds heapUsed, and
+// an unbounded stream/request on previous crashes grew past 12 GB and killed the
+// server with zero log output. Threshold ~5 GB leaves room for the rest of the
+// machine while aborting long before a crash. Clear a flag so we log once.
+let watchdogTriggered = false;
+setInterval(() => {
+  try {
+    const rss = process.memoryUsage().rss;
+    if (rss > 5 * 1024 * 1024 * 1024) {
+      if (!watchdogTriggered) {
+        watchdogTriggered = true;
+        console.error(`[FATAL] Memory watchdog: RSS ${(rss / 1024 / 1024 / 1024).toFixed(1)}GB exceeds 5GB; exiting cleanly to allow restart`);
+      }
+      process.exit(1);
+    }
+  } catch {
+    /* ignore */
+  }
+}, 2_000).unref();
 // Run database migrations on startup
 await runMigrations();
 

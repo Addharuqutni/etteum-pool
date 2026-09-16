@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { db } from "../db/index";
 import { requestLogs, accounts, usageSummary } from "../db/schema";
-import { desc, sql, eq } from "drizzle-orm";
+import { desc, sql, eq, and, or, like, ne, lt, type SQL } from "drizzle-orm";
 import { pool } from "../proxy/pool";
 import { config } from "../config";
 import { getAllModels } from "../proxy/router";
+import { getRequestLogRetentionConfig } from "../proxy/logging";
 
 export const statsRouter = new Hono();
 
@@ -110,6 +111,8 @@ statsRouter.get("/requests", async (c) => {
   const limit = clampNumber(c.req.query("limit"), 50, 1, 500);
   const offset = clampNumber(c.req.query("offset"), 0, 0, 100_000);
   const provider = c.req.query("provider");
+  const status = c.req.query("status");
+  const search = c.req.query("search")?.trim();
 
   const lightColumns = {
     id: requestLogs.id,
@@ -130,16 +133,104 @@ statsRouter.get("/requests", async (c) => {
     createdAt: requestLogs.createdAt,
   };
 
-  const baseQuery = provider
-    ? db.select(lightColumns).from(requestLogs).where(eq(requestLogs.provider, provider))
-    : db.select(lightColumns).from(requestLogs);
+  const conditions: SQL[] = [];
+  if (provider && provider !== "all") conditions.push(eq(requestLogs.provider, provider));
+  if (status === "success" || status === "error") conditions.push(eq(requestLogs.status, status));
+  if (search) {
+    // LIKE is ASCII-case-insensitive in SQLite, so no lowercasing is needed.
+    const needle = `%${search}%`;
+    conditions.push(
+      or(
+        like(requestLogs.model, needle),
+        like(requestLogs.provider, needle),
+        like(requestLogs.errorMessage, needle),
+        like(requestLogs.accountEmail, needle)
+      )!
+    );
+  }
+  const whereClause = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
 
-  const logs = await baseQuery
-    .orderBy(desc(requestLogs.createdAt))
-    .limit(limit)
-    .offset(offset);
+  const [logs, countRows] = await Promise.all([
+    db
+      .select(lightColumns)
+      .from(requestLogs)
+      .where(whereClause)
+      .orderBy(desc(requestLogs.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(requestLogs).where(whereClause),
+  ]);
 
-  return c.json({ data: logs, limit, offset });
+  return c.json({ data: logs, total: Number(countRows[0]?.count ?? 0), limit, offset });
+});
+
+/**
+ * DELETE /api/stats/requests - Prune or purge stored request logs.
+ *
+ * Registered before `/requests/:id` so the literal path is never parsed as an id.
+ * Supported (at least one required, else 400):
+ *   all=true              purge every row
+ *   olderThanDays=N       drop rows older than N days ("retention" = use the saved policy)
+ *   status=error          drop failed requests only
+ *   provider=xxx          drop rows for one provider
+ * `all=true` wins and ignores any other condition.
+ */
+statsRouter.delete("/requests", async (c) => {
+  const all = c.req.query("all") === "true";
+  const provider = c.req.query("provider");
+  const status = c.req.query("status");
+  const olderThanRaw = c.req.query("olderThanDays");
+
+  const conditions: SQL[] = [];
+  let supplied = all;
+
+  if (!all) {
+    if (olderThanRaw !== undefined) {
+      supplied = true;
+      const days =
+        olderThanRaw === "retention"
+          ? (await getRequestLogRetentionConfig()).retentionDays
+          : clampNumber(olderThanRaw, 0, 0, 3650);
+      if (days > 0) {
+        const cutoffSeconds = Math.floor(Date.now() / 1000) - days * 86_400;
+        conditions.push(lt(requestLogs.createdAt, new Date(cutoffSeconds * 1000)));
+      }
+    }
+    if (status === "error") {
+      supplied = true;
+      conditions.push(ne(requestLogs.status, "success"));
+    }
+    if (provider && provider !== "all") {
+      supplied = true;
+      conditions.push(eq(requestLogs.provider, provider));
+    }
+  }
+
+  if (!supplied) {
+    return c.json(
+      { error: "At least one of all, olderThanDays, status, or provider is required" },
+      400
+    );
+  }
+
+  // A supplied filter can still yield no condition (e.g. olderThanDays=retention
+  // with the saved policy set to 0 = keep forever). That must delete nothing —
+  // never fall through to an unconditional DELETE.
+  if (!all && conditions.length === 0) {
+    return c.json({ success: true, deletedCount: 0 });
+  }
+
+  try {
+    const query = db.delete(requestLogs);
+    const rows = await (all
+      ? query
+      : query.where(conditions.length === 1 ? conditions[0] : and(...conditions))
+    ).returning({ id: requestLogs.id });
+    return c.json({ success: true, deletedCount: rows.length });
+  } catch (err) {
+    console.error("[Stats] Failed to delete request logs:", err);
+    return c.json({ error: "Failed to delete request logs" }, 500);
+  }
 });
 
 /**

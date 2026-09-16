@@ -265,4 +265,48 @@ describe("CodexProvider streaming", () => {
     expect(args).toBe('{"path":"."}');
     expect(messageDelta?.data.delta.stop_reason).toBe("tool_use");
   });
+
+  test("OpenAI-compatible stream stops at [DONE] without waiting for the socket to close", async () => {
+    // The upstream finishes the payload with [DONE] but holds the connection
+    // open. Treating [DONE] as "keep reading" left the request hanging until the
+    // consumer gave up, so this asserts the stream completes promptly.
+    const encoder = new TextEncoder();
+    let upstreamCancelled = false;
+    const provider = new TestCodexProvider(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"response.output_text.delta","delta":"done"}\n\n'));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        // deliberately never closed
+      },
+      cancel() { upstreamCancelled = true; },
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+
+    const result = await provider.chatCompletionStream(account, {
+      model: "codex-gpt-5.5",
+      stream: true,
+      messages: [{ role: "user", content: "Say done" }],
+    });
+    expect(result.success).toBe(true);
+
+    const reader = result.stream!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let timedOut = false;
+    const timerId = setTimeout(() => { timedOut = true; }, 3000);
+    try {
+      while (!timedOut) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      clearTimeout(timerId);
+      if (timedOut) { try { await reader.cancel("test deadline"); } catch {} }
+    }
+
+    expect(timedOut).toBe(false);
+    expect(text).toContain('"content":"done"');
+    expect(text).toContain("data: [DONE]");
+    expect(upstreamCancelled).toBe(true);
+  });
 });

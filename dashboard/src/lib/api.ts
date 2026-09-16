@@ -195,13 +195,48 @@ export async function fetchAutoWarmupStatus(): Promise<AutoWarmupStatus> {
   return fetchApi<AutoWarmupStatus>("/api/auth/warmup-schedule");
 }
 
-export async function fetchRequests(page: number = 1, limit: number = 50, provider?: string) {
+export interface RequestLogListResponse {
+  data: unknown[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function fetchRequests(
+  page: number = 1,
+  limit: number = 50,
+  provider?: string,
+  status?: string,
+  search?: string
+): Promise<RequestLogListResponse> {
   const safeLimit = clampLimit(limit, 50, 1, 500);
   const safePage = clampLimit(page, 1, 1, 1000);
   const offset = (safePage - 1) * safeLimit;
   const params = new URLSearchParams({ limit: String(safeLimit), offset: String(offset) });
   if (provider && provider !== "all") params.set("provider", provider);
+  // Only the two statuses the API understands; "all" means "no filter".
+  if (status === "success" || status === "error") params.set("status", status);
+  const trimmedSearch = search?.trim();
+  if (trimmedSearch) params.set("search", trimmedSearch);
   return fetchApi(`/api/stats/requests?${params.toString()}`);
+}
+
+/**
+ * Prune or purge stored request logs. At least one filter is required by the
+ * API; `olderThanDays: "retention"` defers to the saved retention policy.
+ */
+export async function deleteRequestLogs(params: {
+  all?: boolean;
+  olderThanDays?: number | "retention";
+  status?: string;
+  provider?: string;
+}): Promise<{ success: boolean; deletedCount: number }> {
+  const query = new URLSearchParams();
+  if (params.all) query.set("all", "true");
+  if (params.olderThanDays !== undefined) query.set("olderThanDays", String(params.olderThanDays));
+  if (params.status) query.set("status", params.status);
+  if (params.provider && params.provider !== "all") query.set("provider", params.provider);
+  return fetchApi(`/api/stats/requests?${query.toString()}`, { method: "DELETE" });
 }
 
 /**

@@ -2143,7 +2143,7 @@ export default function Accounts() {
               {addDialogProvider === "codex"
                 ? "Add via browser login or instant login with API key/token."
                 : addDialogProvider === "codebuddy"
-                ? "Login CodeBuddy global (www.codebuddy.ai) via OAuth access_token, atau paste API keys (ck_...)."
+                ? "Login CodeBuddy global (www.workbuddy.ai) via OAuth access_token, atau paste API keys (ck_...)."
                 : addDialogProvider === "codebuddy-china"
                 ? "Paste CodeBuddy China access_token (JWT) atau API keys (ck_...). Satu key per baris untuk bulk import."
                 : addDialogProvider === "grok-cli"
@@ -2290,7 +2290,7 @@ ck_xyz789ghi012..."
           {addMode === "oauth" && addDialogProvider === "codebuddy" && (
             <div className="space-y-4">
               <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-                Login CodeBuddy global (<code>www.codebuddy.ai</code>) via OAuth device flow. Browser akan terbuka —
+                Login CodeBuddy global (<code>www.workbuddy.ai</code>) via OAuth device flow. Browser akan terbuka —
                 login pakai akun CodeBuddy, lalu <code>access_token</code> otomatis diambil dan akun ditambahkan.
               </div>
               {codebuddyOauthAuthUrl ? (
@@ -2365,7 +2365,7 @@ ck_xyz789ghi012..."
                   disabled={codebuddyBusy}
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris. Host <code>www.codebuddy.ai</code>.
+                  Paste satu atau lebih CodeBuddy global API key (prefix <code>ck_</code>), satu per baris. Host <code>www.workbuddy.ai</code>.
                   Model tersedia: <code>cb-opus-4.7-1m</code>, <code>cb-opus-4.6</code>, <code>cb-sonnet-4.6</code>, dll.
                 </p>
               </div>

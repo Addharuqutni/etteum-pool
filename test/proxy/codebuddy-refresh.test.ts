@@ -32,12 +32,12 @@ describe("refreshCodebuddyToken", () => {
     try {
       const result = await refreshCodebuddyToken("old-refresh-jwt");
 
-      expect(capturedUrl).toBe("https://www.codebuddy.ai/v2/plugin/auth/token/refresh");
+      expect(capturedUrl).toBe("https://www.workbuddy.ai/v2/plugin/auth/token/refresh");
       expect(capturedInit?.method).toBe("POST");
       expect(String(capturedInit?.body)).toBe("{}");
       const headers = capturedInit?.headers as Record<string, string>;
       expect(headers["X-Refresh-Token"]).toBe("old-refresh-jwt");
-      expect(headers["X-Domain"]).toBe("www.codebuddy.ai");
+      expect(headers["X-Domain"]).toBe("www.workbuddy.ai");
       expect(headers["X-Auth-Refresh-Source"]).toBe("plugin");
       expect(headers["X-Product"]).toBe("SaaS");
 

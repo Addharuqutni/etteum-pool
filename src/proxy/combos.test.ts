@@ -73,8 +73,12 @@ describe("comboMatches", () => {
     expect(comboMatches("gpt-4o", combos)).toBeNull();
   });
 
-  it("returns null for a case-different name (exact match is the key)", () => {
-    expect(comboMatches("Fast", combos)).toBeNull();
+  // Name matching is CASE-INSENSITIVE: a client that lowercases the id
+  // advertised by /v1/models must still reach its chain. createCombo/updateCombo
+  // reject names differing only in case, so this can never be ambiguous.
+  it("matches a case-different name (name matching is case-insensitive)", () => {
+    expect(comboMatches("FAST", combos)).toEqual(["gpt-4o-mini", "claude-3-5-haiku"]);
+    expect(comboMatches("fast", combos)).toEqual(["gpt-4o-mini", "claude-3-5-haiku"]);
   });
 
   it("returns null for a partial / substring name", () => {

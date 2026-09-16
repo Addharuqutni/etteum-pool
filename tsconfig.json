@@ -27,5 +27,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "exclude": ["dashboard"]
+  // Agent scratch copies land at repo-root tmp-verify/ (gitignored) — never typecheck them.
+  "exclude": ["dashboard", "tmp-verify"]
 }

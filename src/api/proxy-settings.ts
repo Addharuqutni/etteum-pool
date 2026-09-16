@@ -10,6 +10,7 @@ import {
   invalidateCompressionCache,
   isCompressionSettingKey,
 } from "../proxy/compression";
+import { reloadLoggingCache, isRequestLogSettingKey } from "../proxy/logging";
 
 function isProxyPoolSettingKey(key: string): boolean {
   return key === "proxy_pool_usage" || key === "proxy_pool_rotation";
@@ -95,6 +96,10 @@ proxySettingsRouter.put("/:key", async (c) => {
     invalidateCompressionCache();
   }
 
+  if (isRequestLogSettingKey(key)) {
+    await reloadLoggingCache();
+  }
+
   return c.json({ key, value: body.value });
 });
 
@@ -125,6 +130,7 @@ proxySettingsRouter.put("/", async (c) => {
   let warmupTouched = false;
   let proxyPoolTouched = false;
   let compressionTouched = false;
+  let requestLogTouched = false;
   for (const [key, value] of Object.entries(body)) {
     const existing = await db
       .select()
@@ -152,12 +158,16 @@ proxySettingsRouter.put("/", async (c) => {
     if (isCompressionSettingKey(key)) {
       compressionTouched = true;
     }
+    if (isRequestLogSettingKey(key)) {
+      requestLogTouched = true;
+    }
   }
 
   if (lbCacheTouched) pool.invalidateLoadBalancingCache();
   if (proxyPoolTouched) invalidateProxySettingsCache();
   if (warmupTouched) void autoWarmupScheduler.reload();
   if (compressionTouched) invalidateCompressionCache();
+  if (requestLogTouched) await reloadLoggingCache();
 
   return c.json({ success: true, updated: Object.keys(body).length });
 });
