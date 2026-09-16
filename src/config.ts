@@ -44,6 +44,10 @@ export const config = {
 providerQuotaTimeoutMs: Number(process.env.POOLPROX_PROVIDER_QUOTA_TIMEOUT_MS) || 15_000,
   billingAddress: JSON.parse(process.env.BILLING_ADDRESS || '{"name":"John Doe","country":"US","line1":"123 Main St","city":"New York","state":"NY","postal_code":"10001"}'),
   browserEngine: process.env.BROWSER_ENGINE || "camoufox",
+  // Public Antigravity OAuth client (same values as decolua/9router). Kept out
+  // of committed source; supply via .env (see .env.example). Empty when unset.
+  antigravityOAuthClientId: process.env.ANTIGRAVITY_OAUTH_CLIENT_ID || "",
+  antigravityOAuthClientSecret: process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET || "",
   captchaService: process.env.CAPTCHA_SERVICE || "none",
   captchaApiKey: process.env.CAPTCHA_API_KEY || "",
   // Providers: codebuddy, codebuddy-china, canva, codex, grok-cli, claude, byok, antigravity

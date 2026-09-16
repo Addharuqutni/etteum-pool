@@ -30,11 +30,10 @@ from app.providers.google_auth import (
 
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Constants copied verbatim from src/proxy/providers/antigravity.ts:16-38
-ANTIGRAVITY_CLIENT_ID = (
-    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-)
-ANTIGRAVITY_CLIENT_SECRET = "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"
+# Public Antigravity OAuth client (same values as decolua/9router). Kept out
+# of committed source; supply via .env (see .env.example).
+ANTIGRAVITY_CLIENT_ID = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_ID", "")
+ANTIGRAVITY_CLIENT_SECRET = os.getenv("ANTIGRAVITY_OAUTH_CLIENT_SECRET", "")
 ANTIGRAVITY_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 ANTIGRAVITY_TOKEN_URL = "https://oauth2.googleapis.com/token"
 ANTIGRAVITY_USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo"
