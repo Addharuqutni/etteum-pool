@@ -105,16 +105,7 @@ export default function UsageChart({ data = defaultData, colorsByModel = {} }: U
               );
             }}
           />
-          <Legend
-            iconType="plainline"
-            iconSize={10}
-            wrapperStyle={{
-              color: "var(--muted-foreground)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "10px",
-              paddingTop: "8px",
-            }}
-          />
+          
           {models.map((model) => (
             <Area
               key={model}

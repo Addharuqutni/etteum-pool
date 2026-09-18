@@ -21,51 +21,6 @@ function compactNumber(n: number): string {
   return Math.round(n).toString();
 }
 
-function BurnRateStrip({ items }: { items: BurnRateItem[] }) {
-  if (!items || items.length === 0) return null;
-  const visible = items.slice(0, 10);
-  const hidden = items.length - visible.length;
-
-  return (
-    <Card
-      aria-label="Provider burn rate"
-      className="grid grid-cols-2 divide-x divide-y divide-[var(--border)] overflow-hidden sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5"
-    >
-      {visible.map((p) => {
-        let tone = "var(--muted-foreground)";
-        let value = "—";
-        if (p.quotaRemaining === 0) {
-          tone = "var(--error)";
-          value = "0d";
-        } else if (p.daysLeft !== null) {
-          value = `${p.daysLeft.toFixed(1)}d`;
-          tone =
-            p.daysLeft < 2 ? "var(--error)" : p.daysLeft < 7 ? "var(--warning)" : "var(--success)";
-        }
-        return (
-          <div key={p.provider} className="px-4 py-4">
-            <div className="eyebrow">{providerLabel(p.provider)}</div>
-            <div
-              className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
-              style={{ color: tone }}
-            >
-              {value}
-            </div>
-            <div className="mt-1.5 truncate font-mono text-[10px] text-[var(--muted-foreground)]">
-              {compactNumber(p.creditsPerDay)}/day · {compactNumber(p.quotaRemaining)} left
-            </div>
-          </div>
-        );
-      })}
-      {hidden > 0 && (
-        <div className="flex items-end justify-end px-4 py-4">
-          <div className="font-mono text-[10px] text-[var(--muted-foreground)]">+{hidden} more</div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
 export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [modelStats, setModelStats] = useState<any[]>([]);
@@ -151,8 +106,6 @@ export default function Dashboard() {
       />
 
       <StatsCards data={dashboardStats} />
-
-      <BurnRateStrip items={burnRateApi.data?.data || []} />
 
       <TokenUsage stats={tokenStats} modelUsage={modelUsage} />
     </div>
