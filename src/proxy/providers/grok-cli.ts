@@ -8,6 +8,13 @@ import {
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
 import { SSE_DONE_SENTINEL, releaseReader } from "../stream-utils";
+import {
+  normalizeResponsesTools,
+  normalizeResponsesToolChoice,
+  collectCompletedToolCalls,
+  toolCallsFromMap,
+  type PendingToolCall,
+} from "./responses-shared";
 
 /**
  * Grok CLI / Grok Build — port of 9router `grok-cli` (device-code OAuth).
@@ -46,13 +53,6 @@ interface GrokCliTokens {
   method?: string;
   subscription_tier?: string | null;
   has_grok_code_access?: boolean | null;
-}
-
-interface PendingToolCall {
-  index: number;
-  id: string;
-  name: string;
-  arguments: string;
 }
 
 const MODEL_EFFORT: Record<string, string | undefined> = {
@@ -173,28 +173,8 @@ export class GrokCliProvider extends BaseProvider {
   }
 
   private normalizeTools(tools: any[] | undefined): any[] {
-    if (!Array.isArray(tools) || tools.length === 0) return [];
-    return tools
-      .map((tool) => {
-        if (tool?.type === "function" && tool.function?.name) {
-          return {
-            type: "function",
-            name: tool.function.name,
-            description: tool.function.description || "",
-            parameters: tool.function.parameters || {},
-          };
-        }
-        if (tool?.name) {
-          return {
-            type: "function",
-            name: tool.name,
-            description: tool.description || "",
-            parameters: tool.input_schema || tool.parameters || {},
-          };
-        }
-        return null;
-      })
-      .filter(Boolean);
+    // Grok CLI accepts a bare `{}` where Codex needs a full empty object schema.
+    return normalizeResponsesTools(tools, {});
   }
 
   private buildPayload(request: ChatCompletionRequest): { instructions: string; input: unknown[] } {
@@ -281,26 +261,11 @@ export class GrokCliProvider extends BaseProvider {
   }
 
   private toolCallsFromMap(byIndex: Map<number, PendingToolCall>) {
-    return [...byIndex.values()]
-      .filter((call) => call.name)
-      .sort((a, b) => a.index - b.index)
-      .map((call) => ({
-        id: call.id,
-        type: "function",
-        function: { name: call.name, arguments: call.arguments || "{}" },
-      }));
+    return toolCallsFromMap(byIndex);
   }
 
   private collectCompletedToolCalls(response: any, byIndex: Map<number, PendingToolCall>) {
-    for (const [index, item] of (response?.output || []).entries()) {
-      if (item?.type !== "function_call") continue;
-      byIndex.set(index, {
-        index,
-        id: item.call_id || item.id || `call_${index}`,
-        name: item.name || "",
-        arguments: item.arguments || "",
-      });
-    }
+    return collectCompletedToolCalls(response, byIndex);
   }
 
   async chatCompletion(account: Account, request: ChatCompletionRequest): Promise<ProviderResult> {

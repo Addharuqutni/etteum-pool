@@ -110,11 +110,15 @@ export async function routeRequest(
   // Failures here are non-fatal — fall back to the sanitized request and move on.
   let compressedRequest = sanitizedRequest;
   let compressionStats: CompressionStats | undefined;
+  // Whether to strip `ponytail:` markers from the response we return. Read from
+  // the same config as the pipeline; stays false if compression fails to load.
+  let stripMarkersFromOutput = false;
   try {
     const cfg = await getCompressionConfig();
     const out = compressRequest(sanitizedRequest, cfg, providerName);
     compressedRequest = out.request;
     compressionStats = out.stats;
+    stripMarkersFromOutput = cfg.ponytail?.stripMarkersFromOutput ?? false;
   } catch (err) {
     console.error("[Compression] Failed, passing request through unchanged:", err);
   }
@@ -214,7 +218,12 @@ export async function routeRequest(
         pool.clearRateLimitCooldown(account.id);
         if (stickyKey) stickyStore.set(stickyKey, account.id, providerName);
         // Scan response for ponytail: markers (output compression telemetry).
-        const ponytailScan = scanPonytailMarkers(result.response);
+        // `stripMarkersFromOutput` decides whether the markers are also removed
+        // from the body we return to the client (they always stay in telemetry).
+        const ponytailScan = scanPonytailMarkers(
+          result.response,
+          stripMarkersFromOutput
+        );
         if (compressionStats && ponytailScan.markers.length > 0) {
           compressionStats.ponytail = {
             inputOverhead: compressionStats.byTechnique.ponytail ?? 0,
@@ -289,7 +298,10 @@ export async function routeRequest(
             pool.clearRateLimitCooldown(account.id);
             if (stickyKey) stickyStore.set(stickyKey, account.id, providerName);
             // Scan retry response for ponytail: markers.
-            const ponytailScan = scanPonytailMarkers(retryResult.response);
+            const ponytailScan = scanPonytailMarkers(
+              retryResult.response,
+              stripMarkersFromOutput
+            );
             if (compressionStats && ponytailScan.markers.length > 0) {
               compressionStats.ponytail = {
                 inputOverhead: compressionStats.byTechnique.ponytail ?? 0,

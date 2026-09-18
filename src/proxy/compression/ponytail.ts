@@ -135,6 +135,9 @@ export function applyPonytail(
 
 const MARKER_RE = /ponytail:\s*([^,\n;]+?)\s*,\s*([^\n;]+)/gi;
 
+/** Same pattern, no capture groups — used to delete markers from response text. */
+const MARKER_STRIP_RE = /ponytail:\s*[^,\n;]+?\s*,\s*[^\n;]+/gi;
+
 /**
  * Walk a provider response looking for `ponytail: <ceiling>, <upgrade>` markers.
  *
@@ -213,7 +216,7 @@ export function scanPonytailMarkers(
 
   function stripText(text: string): string {
     if (!text || typeof text !== "string") return text;
-    return text.replace(/ponytail:\s*[^,\n;]+?\s*,\s*[^\n;]+/gi, "").trim();
+    return text.replace(MARKER_STRIP_RE, "").trim();
   }
 
   function stripNode(node: any): void {

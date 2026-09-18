@@ -1,90 +1,38 @@
+import { createSessionStore, type SessionBase } from "./oauth-session-store";
+
 type CodebuddyOAuthStatus = "pending" | "polling" | "done" | "error" | "cancelled" | "expired";
 
-export interface CodebuddyOAuthSession {
-  state: string;
-  authUrl: string;
+export interface CodebuddyOAuthSession extends SessionBase {
   status: CodebuddyOAuthStatus;
-  createdAt: number;
-  updatedAt: number;
+  authUrl: string;
   expiresAt: number;
-  consumedAt?: number;
   connection?: {
     id: number;
     provider: string;
     email: string;
     displayName: string;
   };
-  error?: string;
 }
 
-const SESSION_TTL_MS = 15 * 60 * 1000;
-const sessions = new Map<string, CodebuddyOAuthSession>();
-
-function now() {
-  return Date.now();
-}
-
-function pruneExpiredSessions() {
-  const cutoff = now() - SESSION_TTL_MS;
-  for (const [state, session] of sessions) {
-    if (session.updatedAt < cutoff || session.createdAt < cutoff || session.expiresAt < now()) {
-      if (session.status === "pending" || session.status === "polling") {
-        session.status = "expired";
-      }
-      if (session.updatedAt < cutoff || session.createdAt < cutoff) {
-        sessions.delete(state);
-      }
-    }
-  }
-}
-
-export function createCodebuddyOAuthSession(input: {
+interface CodebuddyCreateInput {
   state: string;
   authUrl: string;
   expiresInSec?: number;
-}) {
-  pruneExpiredSessions();
-  const ts = now();
-  const session: CodebuddyOAuthSession = {
-    state: input.state,
+}
+
+const store = createSessionStore<CodebuddyOAuthSession, CodebuddyCreateInput>({
+  ttlMs: 15 * 60 * 1000,
+  // Past `expiresAt`, pending/polling sessions flip to "expired" rather than
+  // vanishing, so the polling client gets a definitive answer.
+  markExpired: true,
+  init: (input) => ({
     authUrl: input.authUrl,
-    status: "pending",
-    createdAt: ts,
-    updatedAt: ts,
-    expiresAt: ts + Math.max(60, input.expiresInSec || 600) * 1000,
-  };
-  sessions.set(input.state, session);
-  return session;
-}
+    expiresAt: Date.now() + Math.max(60, input.expiresInSec || 600) * 1000,
+  }),
+});
 
-export function getCodebuddyOAuthSession(state: string) {
-  pruneExpiredSessions();
-  return sessions.get(state) || null;
-}
-
-export function updateCodebuddyOAuthSession(state: string, patch: Partial<CodebuddyOAuthSession>) {
-  const current = getCodebuddyOAuthSession(state);
-  if (!current) return null;
-  const next: CodebuddyOAuthSession = {
-    ...current,
-    ...patch,
-    updatedAt: now(),
-  };
-  sessions.set(state, next);
-  return next;
-}
-
-export function consumeCodebuddyOAuthSession(state: string) {
-  const session = getCodebuddyOAuthSession(state);
-  if (!session) return null;
-  const consumedAt = now();
-  if (["done", "error", "cancelled", "expired"].includes(session.status)) {
-    sessions.delete(state);
-    return { ...session, consumedAt };
-  }
-  return { ...session, consumedAt };
-}
-
-export function deleteCodebuddyOAuthSession(state: string) {
-  return sessions.delete(state);
-}
+export const createCodebuddyOAuthSession = store.create;
+export const getCodebuddyOAuthSession = store.get;
+export const updateCodebuddyOAuthSession = store.update;
+export const consumeCodebuddyOAuthSession = store.consume;
+export const deleteCodebuddyOAuthSession = store.delete;

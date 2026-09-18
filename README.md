@@ -1,6 +1,6 @@
 # Etteum Pool (Private)
 
-**AI Proxy Pool for Multiple Providers** — Load balancing, auto-warmup, credit tracking, and token compression for CodeBuddy, Codex, Canva, **Claude** (OAuth), and **Grok CLI** accounts.
+**AI Proxy Pool for Multiple Providers** — Load balancing, auto-warmup, credit tracking, and token compression for CodeBuddy, Codex, Canva, **Claude** (OAuth), **Antigravity** (OAuth), and **Grok CLI** accounts.
 
 > 🔒 **This is a PRIVATE repository.** All install instructions below assume you have SSH access configured for `git@github.com:priyo000/etteum.git`.
 
@@ -155,7 +155,7 @@ etteum help               # Full command reference
 2. Go to **Accounts** → click **Add Account** for your provider
 3. Pick your method:
    - **Bulk Import** — paste `email|password` lines (CodeBuddy, Canva)
-   - **OAuth** — browser flow (Claude, CodeBuddy) or device code (Grok CLI)
+   - **OAuth** — browser flow (Claude, CodeBuddy, Antigravity) or device code (Grok CLI)
    - **Instant Login** — refresh tokens (Codex)
    - **API Key** — for `byok` and `codebuddy-china` providers
 
@@ -227,10 +227,40 @@ curl http://localhost:1930/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 
-# Stats
-curl http://localhost:1930/api/stats \
-  -H "Authorization: Bearer $API_KEY"
+# Same endpoint, but targeting a combo — the proxy picks the first healthy target
+curl http://localhost:1930/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "my-fallback-chain",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
 ```
+
+`/v1/models` lists combos alongside real models, so a client pointed at the proxy can
+select one by name like any other model.
+
+### Admin endpoints
+
+All require the same `Bearer` key. Mounted under `/api`:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/stats` | GET | Aggregate counters |
+| `/api/stats/requests` | GET | Request log, filterable + paginated (backs the **Requests** page) |
+| `/api/stats/requests/:id` | GET | Single request detail, including `compression_stats` |
+| `/api/stats/requests` | DELETE | Purge log history |
+| `/api/stats/usage` | GET | Per-model usage summary |
+| `/api/stats/providers` | GET | Per-provider breakdown |
+| `/api/stats/models` | GET | Per-model breakdown, joined with catalog metadata |
+| `/api/combos` | GET/POST | List / create combos |
+| `/api/combos/:id` | PUT/DELETE | Update / remove a combo |
+| `/api/settings` | GET/PUT | Read / bulk-update settings (incl. `compression_*`) |
+| `/api/settings/:key` | PUT | Update a single key |
+
+The `/api/public/*` endpoints (model catalog, usage totals, recent request summaries) are
+unauthenticated and intentionally aggregate-only — no emails, no request bodies. They back
+the public share pages at `/pool` and `/s/:slug`.
 
 ---
 
@@ -383,6 +413,7 @@ etteum update
 | Provider          | Auth Method      | Notes                                |
 |-------------------|------------------|--------------------------------------|
 | **Claude**        | OAuth            | Claude Pro/Max subscriptions; `cc-*` model ids |
+| **Antigravity**   | OAuth            | Google Antigravity session; SSRF-guarded fetch |
 | **Grok CLI**      | Device-code OAuth| Grok Build / xAI; `grok-4.5*` models |
 | **CodeBuddy**     | Email/Password   | Multiple models, Tencent Cloud       |
 | **CodeBuddy CN**  | API Key          | China region, vision support         |
@@ -402,19 +433,30 @@ client → /v1/chat/completions → load balancer → provider adapter → provi
 
 ### Token compression pipeline
 
-Before a request reaches the provider, it passes through a lossless, provider-agnostic
-compression pipeline (3–13ms overhead) that cuts input token spend:
+Before a request reaches the provider, it passes through a provider-agnostic
+compression pipeline (3–13 ms overhead) that cuts input token spend:
 
-| Technique | Target | What it does |
-|-----------|--------|--------------|
-| **TSC** (Tool Schema Compaction) | `tools[]` array | Strips JSON-Schema metadata and whitespace the model never reads |
-| **RTK** (shape filters) | tool results | Detects `git-diff`, `git-status`, `tree`, `read-numbered`, `grep`, logs and keeps only the informative parts |
-| **DCP** (Dedup Context Pruning) | messages | Collapses repeated identical tool outputs across turns |
-| **Caveman** | system prompt | Compresses verbose system prompts |
-| **Ponytail** | system prompt | Injects a "lazy senior dev" ruleset — small input overhead, pays back as shorter outputs and fewer tool calls; `ponytail:` markers in responses are tracked |
+| Technique | Target | Default | What it does |
+|-----------|--------|---------|--------------|
+| **TSC** (Tool Schema Compaction) | `tools[]` array | ON | Strips JSON-Schema metadata (`$schema`, `$id`, `additionalProperties: false`) and whitespace the model never reads; 5–25 % of `tools` bytes |
+| **RTK** (shape filters) | tool results | ON | Detects `git-diff`, `git-status`, `tree`, `read-numbered`, `grep`, logs and keeps only the informative parts |
+| **DCP** (Dedup Context Pruning) | messages | OFF | Collapses repeated identical tool outputs across turns |
+| **Caveman** | system prompt | OFF | Compresses verbose system prompts |
+| **Ponytail** | system prompt | OFF | Injects a "lazy senior dev" ruleset — small input overhead, pays back as shorter outputs and fewer tool calls; `ponytail:` markers in responses are tracked |
+| **Image dedupe** | image blocks | ON | Replaces repeated images with `[duplicate of image in message #N]` |
+| **Cache markers** | system prefix | ON | Tags the stable prefix with Anthropic `cache_control` (skipped for Codex) |
 
-Per-request savings are visible on the **Requests** page in the dashboard, anchored to the
-provider-reported `prompt_tokens`.
+Lossless techniques run first so lossy steps don't waste cycles on text that was about to
+be dropped. Per-request savings are visible on the **Requests** page in the dashboard,
+anchored to the provider-reported `prompt_tokens`.
+
+Ponytail also works the other way round: the model tags its own deliberate corner-cuts
+with `ponytail: <ceiling>, <upgrade-path>` comments, the proxy scans responses for them,
+and they land in `compression_stats`. Those same markers appear in this repo's own
+source — they are tracked in [`docs/ponytail-debt.md`](docs/ponytail-debt.md).
+
+Docs: [`docs/compression.md`](docs/compression.md) (pipeline reference) ·
+[`docs/ponytail-debt.md`](docs/ponytail-debt.md) (deferred-shortcut ledger).
 
 ### Combos (fallback model chains)
 
@@ -450,17 +492,24 @@ etteum-pool/
 │   ├── auth/             # Login automation & warmup
 │   ├── db/               # Schema & migrations
 │   ├── proxy/            # Provider implementations + compression pipeline
+│   │   ├── combos.ts     # Combo (virtual model) resolution + fallback ordering
+│   │   ├── stream-utils.ts # Streaming helpers: idle watchdog, replay
+│   │   ├── providers/    # One adapter per provider
+│   │   └── compression/  # TSC · RTK · DCP · Caveman · Ponytail · dedupe · cache markers
 │   └── ws/               # WebSocket server
 ├── dashboard/            # React + Vite + Tailwind
+├── docs/
+│   ├── compression.md    # Compression pipeline reference
+│   └── ponytail-debt.md  # Ledger of deliberate deferrals tagged `ponytail:`
 ├── scripts/
 │   ├── auth/             # Python automation (Playwright + Camoufox)
 │   ├── doctor.ts         # Health diagnostic
 │   ├── preflight.ts      # Post-install verification
 │   └── production.ts     # Production server
-├── etteum               # Linux/macOS CLI
-├── etteum.ps1           # Windows CLI
-├── install.sh           # Linux/macOS installer
-└── install.ps1          # Windows installer
+├── etteum                 # Linux/macOS CLI
+├── etteum.ps1             # Windows CLI
+├── install.sh             # Linux/macOS installer
+└── install.ps1            # Windows installer
 ```
 
 ---

@@ -11,6 +11,14 @@ import type { Account } from "../../db/schema";
 import { config } from "../../config";
 import { runSseStreamLoop } from "../stream-utils";
 import { codebuddyDomain } from "./codebuddy";
+import {
+  shouldFailoverStatus,
+  sanitizeToolSchema,
+  normalizeCodebuddyTools,
+} from "./codebuddy-shared";
+
+// Re-exported so existing importers and tests keep their entry point.
+export { shouldFailoverStatus };
 
 interface CodeBuddyChinaTokens {
   api_key?: string;
@@ -117,11 +125,6 @@ export const CODEBUDDY_CHINA_BASE_URLS = [
 ] as const;
 
 export const CODEBUDDY_CHINA_PRIMARY_BASE_URL: string = CODEBUDDY_CHINA_BASE_URLS[0];
-
-/** Host-scoped upstream failures: the peer host may still serve this account fine. */
-export function shouldFailoverStatus(status: number): boolean {
-  return status >= 500 || status === 404 || status === 405;
-}
 
 /**
  * CodeBuddy China Provider — www.codebuddy.cn (CN) region
@@ -505,101 +508,19 @@ export class CodeBuddyChinaProvider extends BaseProvider {
    * Also sanitize schemas (resolve $ref, strip unsupported fields).
    */
   private normalizeTools(tools: any[] | undefined): any[] {
-    if (!tools || tools.length === 0) return [];
-
-    return tools.map((tool) => {
-      if (tool.type === "function" && tool.function) {
-        return {
-          type: "function",
-          function: {
-            name: tool.function.name,
-            description: tool.function.description || "",
-            parameters: this.sanitizeToolSchema(tool.function.parameters),
-          },
-        };
-      }
-
-      // Convert Anthropic/Claude format to OpenAI format
-      const fn = tool.function || tool;
-      const name = fn?.name || tool?.name;
-      const description = fn?.description || tool?.description || "";
-      const parameters = fn?.parameters || fn?.input_schema || { type: "object", properties: {} };
-
-      return {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: this.sanitizeToolSchema(parameters),
-        },
-      };
-    }).filter((t: any) => t.function?.name);
+    return normalizeCodebuddyTools(tools, (schema) => this.sanitizeToolSchema(schema));
   }
 
   private sanitizeToolSchema(schema: any): any {
     if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
       return { type: "object", properties: {} };
     }
-
-    const cacheKey = JSON.stringify(schema);
-    const cached = this.schemaCache.get(cacheKey);
-    if (cached) return cached;
-
-    const defs = { ...(schema.$defs || {}), ...(schema.definitions || {}) };
-    let resolved = Object.keys(defs).length > 0 || this.hasRefs(schema)
-      ? this.resolveSchemaRefs(schema, defs)
-      : { ...schema };
-
-    for (const key of ["$schema", "$id", "$comment", "$defs", "definitions"]) {
-      delete resolved[key];
-    }
-
-    if (!resolved.type) resolved.type = "object";
-    if (resolved.type === "object" && !resolved.properties) {
-      resolved.properties = {};
-    }
-    if (resolved.required && !Array.isArray(resolved.required)) {
-      delete resolved.required;
-    }
-
-    if (this.schemaCache.size >= CodeBuddyChinaProvider.SCHEMA_CACHE_MAX) {
-      this.schemaCache.clear();
-    }
-    this.schemaCache.set(cacheKey, resolved);
-
-    return resolved;
-  }
-
-  private resolveSchemaRefs(schema: any, defs: Record<string, any>, seen = new Set<string>()): any {
-    if (!schema || typeof schema !== "object") return schema;
-    if (Array.isArray(schema)) return schema.map((item: any) => this.resolveSchemaRefs(item, defs, seen));
-
-    if (schema.$ref && typeof schema.$ref === "string") {
-      const refPath = schema.$ref.replace(/^#\/\$defs\//, "").replace(/^#\/definitions\//, "");
-      if (seen.has(refPath)) return { type: "object", description: `(circular ref: ${refPath})` };
-      const resolved = defs[refPath];
-      if (resolved) {
-        seen.add(refPath);
-        const result = this.resolveSchemaRefs({ ...resolved }, defs, seen);
-        seen.delete(refPath);
-        return result;
-      }
-      return { type: "object" };
-    }
-
-    const clone: any = {};
-    for (const [key, value] of Object.entries(schema)) {
-      if (key === "$defs" || key === "definitions") continue;
-      clone[key] = this.resolveSchemaRefs(value, defs, seen);
-    }
-    return clone;
-  }
-
-  private hasRefs(obj: any): boolean {
-    if (!obj || typeof obj !== "object") return false;
-    if (Array.isArray(obj)) return obj.some((item: any) => this.hasRefs(item));
-    if ("$ref" in obj) return true;
-    return Object.values(obj).some((value: any) => this.hasRefs(value));
+    return sanitizeToolSchema(
+      schema,
+      this.schemaCache,
+      CodeBuddyChinaProvider.SCHEMA_CACHE_MAX,
+      ["$schema", "$id", "$comment", "$defs", "definitions"]
+    );
   }
 
   async chatCompletion(

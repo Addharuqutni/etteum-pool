@@ -11,6 +11,11 @@ import {
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
 import { runSseStreamLoop } from "../stream-utils";
+import {
+  shouldFailoverStatus,
+  sanitizeToolSchema,
+  normalizeCodebuddyTools,
+} from "./codebuddy-shared";
 
 
 /**
@@ -103,9 +108,7 @@ export const CODEBUDDY_BASE_URL: string = CODEBUDDY_PRIMARY_BASE_URL;
  * those statuses drive the refresh-then-retry path. 400 (our malformed body)
  * and 429 (per-account quota) are equally not host problems.
  */
-export function shouldFailoverStatus(status: number): boolean {
-  return status >= 500 || status === 404 || status === 405;
-}
+export { shouldFailoverStatus };
 
 export function resolveCodebuddyBaseUrl(): string {
   return CODEBUDDY_BASE_URL;
@@ -391,126 +394,19 @@ export class CodeBuddyProvider extends BaseProvider {
   }
 
   private normalizeTools(tools: any[] | undefined): any[] {
-    if (!tools || tools.length === 0) return [];
-
-    return tools.map((tool) => {
-      // If already in OpenAI format, extract and re-normalize
-      // Note: tool descriptions are already filtered by router.sanitizeRequest()
-      if (tool.type === "function" && tool.function) {
-        return {
-          type: "function",
-          function: {
-            name: tool.function.name,
-            description: tool.function.description || "",
-            parameters: this.sanitizeToolSchema(tool.function.parameters),
-          },
-        };
-      }
-
-      // Convert Anthropic/Claude format to OpenAI format
-      const fn = tool.function || tool;
-      const name = fn?.name || tool?.name;
-      const description = fn?.description || tool?.description || "";
-      const parameters = fn?.parameters || fn?.input_schema || { type: "object", properties: {} };
-
-      return {
-        type: "function",
-        function: {
-          name,
-          description,
-          parameters: this.sanitizeToolSchema(parameters),
-        },
-      };
-    }).filter(t => t.function?.name);
-  }
-
-  /**
-   * Resolve all $ref references in a JSON Schema by inlining definitions.
-   * This is necessary because CodeBuddy's API doesn't support $ref/$defs.
-   */
-  private resolveSchemaRefs(schema: any, defs: Record<string, any>, seen = new Set<string>()): any {
-    if (!schema || typeof schema !== "object") return schema;
-    if (Array.isArray(schema)) return schema.map(item => this.resolveSchemaRefs(item, defs, seen));
-
-    // Handle $ref
-    if (schema.$ref && typeof schema.$ref === "string") {
-      const refPath = schema.$ref.replace(/^#\/\$defs\//, "").replace(/^#\/definitions\//, "");
-      if (seen.has(refPath)) {
-        // Circular reference — return a generic object to avoid infinite loop
-        return { type: "object", description: `(circular ref: ${refPath})` };
-      }
-      const resolved = defs[refPath];
-      if (resolved) {
-        seen.add(refPath);
-        const result = this.resolveSchemaRefs({ ...resolved }, defs, seen);
-        seen.delete(refPath);
-        return result;
-      }
-      // Unresolvable ref — return generic
-      return { type: "object" };
-    }
-
-    // Recursively resolve all nested objects
-    const clone: any = {};
-    for (const [key, value] of Object.entries(schema)) {
-      if (key === "$defs" || key === "definitions") continue; // skip defs themselves
-      clone[key] = this.resolveSchemaRefs(value, defs, seen);
-    }
-    return clone;
+    return normalizeCodebuddyTools(tools, (schema) => this.sanitizeToolSchema(schema));
   }
 
   private sanitizeToolSchema(schema: any): any {
     if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
       return { type: "object", properties: {} };
     }
-
-    // Cache lookup — Claude Code sends identical tool schemas every request,
-    // so we avoid re-resolving $ref on every call.
-    const cacheKey = JSON.stringify(schema);
-    const cached = this.schemaCache.get(cacheKey);
-    if (cached) return cached;
-
-    // Extract $defs/definitions before removing them, so we can resolve $ref inline
-    const defs = { ...(schema.$defs || {}), ...(schema.definitions || {}) };
-
-    // Resolve all $ref references inline
-    let resolved = Object.keys(defs).length > 0 || this.hasRefs(schema)
-      ? this.resolveSchemaRefs(schema, defs)
-      : { ...schema };
-
-    // Remove unsupported JSON Schema meta fields
-    for (const key of ["$schema", "$id", "$comment", "$defs", "definitions"]) {
-      delete resolved[key];
-    }
-
-    // Ensure type is set
-    if (!resolved.type) resolved.type = "object";
-
-    // Ensure properties exists for object types
-    if (resolved.type === "object" && !resolved.properties) {
-      resolved.properties = {};
-    }
-
-    // Ensure required is an array if present
-    if (resolved.required && !Array.isArray(resolved.required)) {
-      delete resolved.required;
-    }
-
-    // Store in cache (evict all if cache grows too large)
-    if (this.schemaCache.size >= CodeBuddyProvider.SCHEMA_CACHE_MAX) {
-      this.schemaCache.clear();
-    }
-    this.schemaCache.set(cacheKey, resolved);
-
-    return resolved;
-  }
-
-  /** Check if a schema object contains any $ref anywhere (deep check) */
-  private hasRefs(obj: any): boolean {
-    if (!obj || typeof obj !== "object") return false;
-    if (Array.isArray(obj)) return obj.some(item => this.hasRefs(item));
-    if ("$ref" in obj) return true;
-    return Object.values(obj).some(value => this.hasRefs(value));
+    return sanitizeToolSchema(
+      schema,
+      this.schemaCache,
+      CodeBuddyProvider.SCHEMA_CACHE_MAX,
+      ["$schema", "$id", "$comment", "$defs", "definitions"]
+    );
   }
 
   async chatCompletion(

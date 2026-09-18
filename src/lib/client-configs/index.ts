@@ -45,13 +45,6 @@ export function getClientList(): ClientMeta[] {
   }));
 }
 
-/** Check if a specific client is installed. */
-export { isClientDetected } from "./paths";
-/** Get all detected clients. */
-export { detectInstalledClients } from "./paths";
-/** Get config paths for a client. */
-export { getAllConfigPaths, getPrimaryConfigPath, resolveExistingPath } from "./paths";
-
 /**
  * Generate config for a single client.
  * Set info.preview = true to skip writing to disk (dry-run).
@@ -71,17 +64,6 @@ export async function generateClientConfig(
     };
   }
   return { client: clientId, ...(await gen({ ...info })) };
-}
-
-/**
- * Generate configs for all detected clients (preview only).
- */
-export async function generateAllConfigs(
-  info: ProxyConnectionInfo
-): Promise<ClientConfigResult[]> {
-  const detected = detectInstalledClients();
-  const targets = (Object.keys(detected) as ClientTarget[]).filter((id) => detected[id]);
-  return Promise.all(targets.map((id) => generateClientConfig(id, info)));
 }
 
 /**

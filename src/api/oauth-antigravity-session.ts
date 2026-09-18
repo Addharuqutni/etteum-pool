@@ -1,10 +1,18 @@
 import { randomBytes } from "crypto";
+import { createSessionStore, type SessionBase } from "./oauth-session-store";
 
-export interface AntigravityOAuthSession {
-  state: string;
+export interface AntigravityOAuthSession extends SessionBase {
+  status:
+    | "pending"
+    | "waiting_authorization"
+    | "exchanging"
+    | "done"
+    | "error"
+    | "cancelled"
+    | "expired";
   codeVerifier?: string;
-  status: "waiting_authorization" | "exchanging" | "done" | "error" | "cancelled" | "expired";
   authUrl?: string;
+  expiresAt: number;
   connection?: {
     id: number | string;
     provider: "antigravity";
@@ -12,63 +20,40 @@ export interface AntigravityOAuthSession {
     displayName?: string;
     projectId: string;
   };
-  error?: string;
-  createdAt: number;
-  expiresAt: number;
 }
 
-const antigravitySessions = new Map<string, AntigravityOAuthSession>();
-const ANTIGRAVITY_SESSION_TIMEOUT_MS = 300 * 1000; // 5 minutes
+interface AntigravityCreateInput {
+  state: string;
+  authUrl: string;
+  codeVerifier?: string;
+}
+
+const SESSION_TIMEOUT_MS = 300 * 1000; // 5 minutes
+
+const store = createSessionStore<AntigravityOAuthSession, AntigravityCreateInput>({
+  // Read paths prune on the same 5-minute expiry that bounds the handshake;
+  // `expiresAt` is what the /antigravity/status check reads.
+  ttlMs: SESSION_TIMEOUT_MS,
+  init: (input) => ({
+    codeVerifier: input.codeVerifier,
+    authUrl: input.authUrl,
+    expiresAt: Date.now() + SESSION_TIMEOUT_MS,
+  }),
+});
 
 export function generateState(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function createAntigravityOAuthSession(authUrl: string, codeVerifier?: string): AntigravityOAuthSession {
-  const state = generateState();
-  const session: AntigravityOAuthSession = {
-    state,
-    codeVerifier,
-    status: "waiting_authorization",
-    authUrl,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + ANTIGRAVITY_SESSION_TIMEOUT_MS,
-  };
-  antigravitySessions.set(state, session);
-  return session;
+/**
+ * Create a session with a freshly generated state, matching the original
+ * call shape: `createAntigravityOAuthSession(authUrl, codeVerifier)`.
+ */
+export function createAntigravityOAuthSession(authUrl: string, codeVerifier?: string) {
+  return store.create({ state: generateState(), authUrl, codeVerifier });
 }
 
-export function getAntigravityOAuthSession(state: string): AntigravityOAuthSession | undefined {
-  return antigravitySessions.get(state);
-}
-
-export function updateAntigravityOAuthSession(state: string, updates: Partial<Omit<AntigravityOAuthSession, "state" | "createdAt" | "expiresAt">>): void {
-  const session = antigravitySessions.get(state);
-  if (!session) return;
-
-  Object.assign(session, updates);
-}
-
-export function consumeAntigravityOAuthSession(state: string): AntigravityOAuthSession | undefined {
-  const session = antigravitySessions.get(state);
-  if (!session) return undefined;
-
-  antigravitySessions.delete(state);
-  return session;
-}
-
-export function deleteAntigravityOAuthSession(state: string): void {
-  antigravitySessions.delete(state);
-}
-
-// ponytail: sessions also die by expiry check in /antigravity/status; no sweeper needed at this traffic level
-export function removeExpiredAntigravityOAuthSessions(): void {
-  const now = Date.now();
-  for (const [state, session] of antigravitySessions) {
-    if (session.expiresAt < now) antigravitySessions.delete(state);
-  }
-}
-
-export function orderAntigravityOAuthSessionsByUpdatedAt(): AntigravityOAuthSession[] {
-  return [...antigravitySessions.values()].sort((a, b) => b.createdAt - a.createdAt);
-}
+export const getAntigravityOAuthSession = store.get;
+export const updateAntigravityOAuthSession = store.update;
+export const consumeAntigravityOAuthSession = store.consume;
+export const deleteAntigravityOAuthSession = store.delete;

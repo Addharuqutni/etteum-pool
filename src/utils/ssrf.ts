@@ -182,10 +182,9 @@ export const MAX_REDIRECT_DEPTH = 5;
 export async function safeFetch(
   url: string,
   init: RequestInit = {},
-  opts: { timeoutMs?: number; maxRedirects?: number } = {},
+  opts: { timeoutMs?: number } = {},
 ): Promise<Response> {
-  const maxRedirects = opts.maxRedirects ?? MAX_REDIRECT_DEPTH;
-  return safeFetchInner(url, init, maxRedirects, opts.timeoutMs ?? 15_000);
+  return safeFetchInner(url, init, MAX_REDIRECT_DEPTH, opts.timeoutMs ?? 15_000);
 }
 
 async function safeFetchInner(
@@ -232,14 +231,4 @@ async function safeFetchInner(
   }
 
   return response;
-}
-
-/** Whether safeFetch should be used for a given URL (true for user-controlled origins). */
-export function needsSsrfGuard(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
 }

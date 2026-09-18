@@ -334,14 +334,6 @@ export async function scrapeProxiesDetailed(
 }
 
 /**
- * Convenience wrapper — returns just the merged proxies (source diagnostics
- * discarded). Kept for call-sites that don't need per-source status.
- */
-export async function scrapeProxies(options: ScrapeOptions = {}): Promise<ScrapedProxy[]> {
-  return (await scrapeProxiesDetailed(options)).proxies;
-}
-
-/**
  * Health-check scraped proxies with bounded concurrency, keeping only the ones
  * that respond. Used when the caller asks to verify before adding to the pool.
  */

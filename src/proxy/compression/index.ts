@@ -35,7 +35,6 @@ export { DEFAULT_COMPRESSION_CONFIG, DEFAULT_DCP_WHITELIST, emptyStats } from ".
 export { estimateRequestTokens, estimateTokensFromString } from "./token-estimate";
 export {
   getCompressionConfig,
-  getCachedCompressionConfig,
   invalidateCompressionCache,
   isCompressionSettingKey,
 } from "./settings";

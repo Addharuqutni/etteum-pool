@@ -178,13 +178,6 @@ export async function getCompressionConfig(): Promise<CompressionConfig> {
   }
 }
 
-/** Return cached config synchronously, or null if not yet loaded. */
-export function getCachedCompressionConfig(): CompressionConfig | null {
-  if (!cache) return null;
-  if (Date.now() - cache.loadedAt > TTL_MS) return null;
-  return cache.config;
-}
-
 export function invalidateCompressionCache(): void {
   cache = null;
 }

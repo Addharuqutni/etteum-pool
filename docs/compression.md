@@ -38,8 +38,10 @@ text that was about to be removed anyway. Ponytail runs after Caveman so the
 system prompt is already compacted before the ruleset is appended. Cache
 markers run last because they tag whatever the final prefix shape is.
 
-If anything in the pipeline throws, the original sanitized request is
-forwarded as a fallback — compression failure never breaks a real request.
+`scanPonytailMarkers()` sits *outside* `compressRequest()`, on the success path
+in `src/proxy/router.ts`: it runs after the provider responds (both the primary
+attempt and the streaming retry) and only records telemetry — it never blocks
+or rewrites a request that already shipped.
 
 If anything in the pipeline throws, the original sanitized request is
 forwarded as a fallback — compression failure never breaks a real request.
@@ -47,6 +49,32 @@ forwarded as a fallback — compression failure never breaks a real request.
 ---
 
 ## Each technique
+
+### 0. TSC — Tool Schema Compaction *(lossless, default ON)*
+
+Compacts the `tools[]` array, which is usually the largest repeated block in
+agent traffic (100 KB+ per turn, byte-identical every turn).
+
+Three passes, ordered by how obviously safe they are:
+
+| Pass | Setting | What it removes |
+| ---- | ------- | --------------- |
+| Drop JSON-Schema metadata | `compression_tsc_drop_schema_meta` | `$schema`, `$id`, `$comment`, `$ref`, and `additionalProperties: false` — fields the model never acts on. |
+| Trim descriptions | `compression_tsc_trim_descriptions` | Runs of 2+ spaces/tabs collapse to one space; blank-line runs collapse to a single blank line. Applied recursively at every depth, including nested `properties.*`, where real schemas spend most of their bytes. |
+| Strip schema whitespace | `compression_tsc_strip_schema_whitespace` | Pretty-printed JSON indentation, via canonicalised re-serialisation. |
+
+Both tool-definition layouts are handled, so TSC works for either provider
+family: Anthropic-flavor `{name, description, input_schema}` and OpenAI-flavor
+`{type: "function", function: {name, description, parameters}}`.
+
+**Cost/benefit.** Under 2 ms for 50 tools; 5–25 % of the `tools` byte size,
+which on tool-heavy traffic is 1–5 % of total request tokens. This is why TSC
+runs first: it is cheap, provider-agnostic, and touches neither messages nor
+system prompt, so nothing downstream can invalidate it.
+
+**Defaults:** `enabled: true`, all three passes on.
+
+---
 
 ### 1. RTK — Tool Result Compression *(lossy, default ON)*
 
@@ -208,23 +236,35 @@ ponytail: <ceiling-name>, <upgrade-path>
 
 Example: `// ponytail: O(n²) scan, replace with indexed lookup when n>1000`
 
-The proxy scans the response (content, tool_calls) for these markers and
-records them in `compressionStats.ponytail.markerHits`. When
-`stripMarkersFromOutput` is on, markers are removed from the stored
-response body (they remain in the telemetry).
+The proxy scans the response for these markers and records them in
+`compressionStats.ponytail.markerHits`, with a `location` of `content`,
+`tool_calls`, `tool_input`, or `tool_result` depending on where the marker was
+found. When `stripMarkersFromOutput` is on, markers are removed from the stored
+response body (they remain in the telemetry). The scan is driven by a single
+module-level regex, so its `lastIndex` is reset before each walk — otherwise a
+stateful `/g` regex would silently skip matches on every second response.
 
 **Settings:**
 
 | Setting                                   | Default | Type                          | Notes                                                      |
 | ----------------------------------------- | ------- | ----------------------------- | --------------------------------------------------------- |
 | `compression_ponytail_enabled`            | `false` | bool                          | Master switch. OFF because it changes model behaviour.    |
-| `compression_ponytail_mode`               | `lite`  | `lite` \| `full` \| `ultra`   | Ruleset intensity.                                         |
+| `compression_ponytail_mode`               | `full`  | `lite` \| `full` \| `ultra`   | Ruleset intensity. Unrecognised values fall back to `full`. |
 | `compression_ponytail_provider_overrides` | `{}`    | JSON `{provider: bool}`       | Skip injection for specific providers.                    |
 | `compression_ponytail_strip_markers`      | `false` | bool                          | Remove `ponytail:` markers from stored response body.     |
 
 **Why default OFF.** Same reasoning as Caveman: it changes model behaviour.
 The `lite` ruleset is relatively safe (just YAGNI discipline), but we
 prefer opt-in for anything that alters the model's voice.
+
+**Implementation notes.** `applyPonytail()` handles all three system-prompt
+shapes — Anthropic `system: "…"`, Anthropic `system: [{type:"text",…}]`, and an
+OpenAI `messages[0].role === "system"` message. When a request has no system
+prompt at all it inserts a fresh system message at position 0 rather than
+creating an Anthropic `system` field, so the same path works for both provider
+families. `saved` is negative for this technique; the orchestrator records it
+regardless of sign (`byTechnique.ponytail`), which is why the dashboard shows
+Ponytail as a small *cost*, not a saving.
 
 ---
 
@@ -249,7 +289,7 @@ data, or the URL itself for URL-style images. Collision-resistant for the
 
 ---
 
-### 5. Cache Markers — Anthropic Prompt Caching *(structural, default ON)*
+### 6. Cache Markers — Anthropic Prompt Caching *(structural, default ON)*
 
 Tags the stable system-prompt prefix (or last tool definition) with
 `cache_control: { type: "ephemeral" }` so upstream Anthropic-compatible
@@ -399,6 +439,12 @@ config cache to expire. The HTTP API does this invalidation for you.
 ```ts
 // src/proxy/compression/types.ts
 export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
+  tsc: {
+    enabled: true,
+    stripSchemaWhitespace: true,
+    trimDescriptions: true,
+    dropSchemaMeta: true,
+  },
   rtk: {
     enabled: true,
     maxToolChars: 4000,
@@ -413,6 +459,12 @@ export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
     enabled: false,
     level: "lite",
   },
+  ponytail: {
+    enabled: false,
+    mode: "full",
+    providerOverrides: {},
+    stripMarkersFromOutput: false,
+  },
   cacheMarkers: {
     enabled: true,
     providerOverrides: { codex: false },
@@ -423,18 +475,38 @@ export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
 };
 ```
 
+**Clamps applied by the settings loader** (`settings.ts`) — out-of-range or
+unparseable values silently fall back rather than erroring:
+
+| Key family | Range / accepted values |
+| ---------- | ----------------------- |
+| `compression_rtk_max_tool_chars` | 500 – 50 000 (default 4 000) |
+| `compression_rtk_keep_last_n_turns_full` | 0 – 20 (default 2) |
+| `compression_caveman_level` | `lite` \| `full` \| `ultra`; anything else → `lite` |
+| `compression_ponytail_mode` | `lite` \| `full` \| `ultra`; anything else → `full` |
+| booleans | `true`/`1`/`yes` and `false`/`0`/`no` (case-insensitive) |
+| `*_overrides` | JSON object of `{provider: bool}`; merged over defaults |
+| `compression_dcp_whitelist` | JSON array of tool names |
+
 ---
 
 ## Edge cases the pipeline handles
 
 | Scenario                                      | What happens                                                       |
 | --------------------------------------------- | ------------------------------------------------------------------ |
+| Request has no `tools[]`                      | TSC no-op, savings = 0.                                             |
+| Schema nests `description` inside `properties` | Trimmed at every depth, not just top level.                        |
+| Tool uses `additionalProperties: true`        | Kept — TSC only drops the `false` case, which is pure noise.       |
 | `tool_result` smaller than `maxToolChars`     | RTK no-op, savings = 0.                                            |
 | Last 2 turns include a 50 KB tool_result      | Untouched (in protected window).                                   |
 | Errored tool result repeated 3×               | DCP skips errors entirely.                                         |
 | Bash command repeated 3× (e.g. `ls`)          | Never deduped (Bash is not in the read-only whitelist).            |
 | System prompt has a UUID or timestamp          | Cache markers auto-skip (would never cache).                       |
 | Provider is Codex                             | Cache markers auto-skip.                                           |
+| Provider is blacklisted for Ponytail          | Injection skipped; `byTechnique.ponytail` stays absent.            |
+| Request has no system prompt at all           | Ponytail inserts a `role: "system"` message at position 0.         |
+| Model emits a `ponytail:` marker every turn   | Recorded in `markerHits`; the module-level regex resets `lastIndex` per walk so no match is dropped. |
+| Model emits a marker with no comma            | Not a marker — the regex requires `<ceiling>, <upgrade-path>`.     |
 | Pipeline throws unexpectedly                  | Sanitized request is forwarded; error logged; request still served. |
 | User pastes the same image twice              | Second copy → `[duplicate of image in message #N]`. ~9 KB saved per duplicate. |
 | `Read /tmp/big.txt` with 200 KB content       | Older calls truncated; latest fully preserved.                     |
@@ -448,15 +520,20 @@ export const DEFAULT_COMPRESSION_CONFIG: CompressionConfig = {
 | Stage         | Typical | p99   | Worst case  |
 | ------------- | ------- | ----- | ----------- |
 | Token estimate | < 1 ms  | 2 ms  | ~5 ms       |
+| TSC            | < 1 ms  | 2 ms  | ~5 ms       |
 | RTK            | 1–3 ms  | 8 ms  | ~15 ms      |
 | DCP            | 1–2 ms  | 5 ms  | ~10 ms      |
 | Caveman        | < 1 ms  | 2 ms  | ~5 ms       |
+| Ponytail       | < 1 ms  | 1 ms  | ~2 ms       |
 | Image dedupe   | < 1 ms  | 3 ms  | ~8 ms       |
 | Cache markers  | < 1 ms  | 1 ms  | ~2 ms       |
 | **Total**      | **3–8 ms** | **20 ms** | **~30 ms** |
 
-Live measurements after deploy: median ~5 ms, p99 ~12 ms. Token-saving
-gain dwarfs the latency cost on real Claude Code workloads.
+TSC is quoted at <2 ms for 50 tools; Ponytail is a single string concat plus a
+regex walk over the response, so it never shows up in the request budget at all.
+
+Live measurements after deploy: median ~5 ms, p99 ~12 ms. The token savings
+dwarf the latency cost on real agent workloads.
 
 ---
 
@@ -467,18 +544,21 @@ src/proxy/compression/
 ├── types.ts             # CompressionConfig, CompressionStats, defaults
 ├── token-estimate.ts    # Char/4 estimator
 ├── settings.ts          # DB-backed config loader, 10 s TTL cache
+├── tsc.ts               # Tool-schema compaction (metadata, whitespace, descriptions)
 ├── rtk.ts               # Tool-result truncation + smart patterns
 ├── dcp.ts               # Read-only tool dedup
 ├── caveman.ts           # 3-tier system prompt compaction
+├── ponytail.ts          # applyPonytail() injector + scanPonytailMarkers()
+├── ponytail-ruleset.ts  # lite/full/ultra ruleset text (adapted from DietrichGebert/ponytail, MIT)
 ├── cache-markers.ts     # Anthropic cache_control injector
 ├── image-dedupe.ts      # Duplicate image detection
 ├── index.ts             # compressRequest() orchestrator
-└── compression.test.ts  # 21 unit tests, 52 assertions
+└── compression.test.ts  # 49 tests, 137 assertions
 ```
 
 Integration points:
 
-- `src/proxy/router.ts` — invokes `compressRequest()` after `sanitizeRequest()`
+- `src/proxy/router.ts` — invokes `compressRequest()` after `sanitizeRequest()`, then `scanPonytailMarkers()` on each success path (primary attempt + streaming retry)
 - `src/proxy/index.ts` — persists `CompressionStats` per request
 - `src/api/proxy-settings.ts` — invalidates compression cache on PUT
 - `src/db/schema.ts` — `request_logs.compression_stats` (JSON column)

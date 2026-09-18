@@ -8,6 +8,12 @@ import {
 import type { Account } from "../../db/schema";
 import { config } from "../../config";
 import { SSE_DONE_SENTINEL, releaseReader } from "../stream-utils";
+import {
+  normalizeResponsesTools,
+  normalizeResponsesToolChoice,
+  toolCallsFromMap,
+  type PendingToolCall,
+} from "./responses-shared";
 
 interface CodexTokens {
   access_token: string;
@@ -38,13 +44,6 @@ const codexModelMap: Record<string, string> = {
   "codex-gpt-5.3": "gpt-5.3-codex",
   "codex-gpt-5.2": "gpt-5.2",
 };
-
-interface PendingToolCall {
-  index: number;
-  id: string;
-  name: string;
-  arguments: string;
-}
 
 /**
  * Find the next SSE event boundary in `buffer`.
@@ -168,40 +167,11 @@ export class CodexProvider extends BaseProvider {
   }
 
   private normalizeTools(tools: any[] | undefined): any[] {
-    if (!Array.isArray(tools) || tools.length === 0) return [];
-    return tools
-      .map((tool) => {
-        if (tool?.type === "function" && tool.function?.name) {
-          return {
-            type: "function",
-            name: tool.function.name,
-            description: tool.function.description || "",
-            parameters: tool.function.parameters || { type: "object", properties: {} },
-          };
-        }
-        if (tool?.name) {
-          return {
-            type: "function",
-            name: tool.name,
-            description: tool.description || "",
-            parameters: tool.input_schema || tool.parameters || { type: "object", properties: {} },
-          };
-        }
-        return null;
-      })
-      .filter(Boolean);
+    return normalizeResponsesTools(tools, { type: "object", properties: {} });
   }
 
   private normalizeToolChoice(toolChoice: any): any {
-    if (toolChoice == null) return "auto";
-    if (typeof toolChoice === "string") return toolChoice;
-    if (toolChoice.type === "function" && toolChoice.function?.name) {
-      return { type: "function", name: toolChoice.function.name };
-    }
-    if (toolChoice.type === "tool" && toolChoice.name) {
-      return { type: "function", name: toolChoice.name };
-    }
-    return toolChoice;
+    return normalizeResponsesToolChoice(toolChoice);
   }
 
   private normalizeReasoningEffort(effort: unknown): string | undefined {
@@ -351,14 +321,7 @@ export class CodexProvider extends BaseProvider {
   }
 
   private toolCallsFromMap(byIndex: Map<number, PendingToolCall>) {
-    return [...byIndex.values()]
-      .filter((call) => call.name)
-      .sort((a, b) => a.index - b.index)
-      .map((call) => ({
-        id: call.id,
-        type: "function",
-        function: { name: call.name, arguments: call.arguments || "{}" },
-      }));
+    return toolCallsFromMap(byIndex);
   }
 
   private async makeRequest(account: Account, request: ChatCompletionRequest): Promise<Response> {
