@@ -22,7 +22,7 @@ export function getWsBase(): string {
   return `${protocol}://${window.location.hostname}:${backendPort}`;
 }
 
-function getApiKey(): string {
+export function getApiKey(): string {
   return localStorage.getItem("api_key") || "pool-proxy-secret-key";
 }
 

@@ -255,7 +255,7 @@ function isJsonParseError(error: unknown): boolean {
     (error instanceof Error && /json|parse|unexpected end|unexpected token/i.test(error.message));
 }
 
-function openAIErrorResponse(message: string, status: 400 | 503) {
+export function openAIErrorResponse(message: string, status: 400 | 503) {
   return {
     error: {
       message,
@@ -742,7 +742,7 @@ function resolveComboForLog(
   return null;
 }
 
-async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKeyRow, apiKeyInflightToken?: number) {
+export async function handleChatCompletion(body: ChatCompletionRequest, apiKey?: ApiKeyRow, apiKeyInflightToken?: number) {
   // Resolve combos FIRST: an exact combo name wins over model aliasing. The
   // combo loop tries each target in order, falling back to the next on failure.
   // (routeRequest still retries accounts within a provider; this adds the
