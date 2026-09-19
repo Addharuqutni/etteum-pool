@@ -41,7 +41,7 @@ export default function ProviderCards({ providers = defaultProviders }: Provider
                 />
                 <span className="truncate">{provider.name}</span>
               </h3>
-              <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              <span className="shrink-0 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                 {provider.accounts.active}/{provider.accounts.total}
               </span>
             </div>
@@ -64,7 +64,7 @@ export default function ProviderCards({ providers = defaultProviders }: Provider
               <div className="space-y-1.5">
                 <div className="flex items-baseline justify-between">
                   <span className="eyebrow">Credits</span>
-                  <span className="font-mono text-[12px] tabular-nums text-[var(--foreground)]">
+                  <span className="font-mono text-body tabular-nums text-[var(--foreground)]">
                     {provider.credits.used.toFixed(2)} / {provider.credits.total.toFixed(2)}
                   </span>
                 </div>
@@ -74,7 +74,7 @@ export default function ProviderCards({ providers = defaultProviders }: Provider
                   style={{ ["--progress-color" as any]: provider.color }}
                   className="h-2"
                 />
-                <div className="flex justify-between font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                <div className="flex justify-between font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                   <span>{usedPercentage}% used</span>
                   <span>{remaining.toFixed(2)} remaining</span>
                 </div>
@@ -85,7 +85,7 @@ export default function ProviderCards({ providers = defaultProviders }: Provider
       })}
       {providers.length === 0 && (
         <Card className="col-span-full">
-          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+          <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">
             No provider data yet. Add/login accounts to populate this section.
           </p>
         </Card>

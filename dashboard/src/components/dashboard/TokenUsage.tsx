@@ -310,20 +310,20 @@ export default function TokenUsage({
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
           <div>
             <div className="eyebrow">Tokens {period === "all" ? "all time" : period}</div>
-            <div className="mt-1 font-mono text-[26px] font-semibold leading-none tabular-nums text-[var(--foreground)]">
+            <div className="mt-1 font-mono text-stat font-semibold tabular-nums text-[var(--foreground)]">
               {formatNumber(stats.total)}
             </div>
           </div>
           <dl className="flex items-end gap-5 pb-0.5">
             <div>
               <dt className="eyebrow">Prompt</dt>
-              <dd className="mt-1 font-mono text-sm tabular-nums text-[var(--foreground)]">
+              <dd className="mt-1 font-mono text-lead tabular-nums text-[var(--foreground)]">
                 {formatNumber(stats.prompt)}
               </dd>
             </div>
             <div>
               <dt className="eyebrow">Completion</dt>
-              <dd className="mt-1 font-mono text-sm tabular-nums text-[var(--foreground)]">
+              <dd className="mt-1 font-mono text-lead tabular-nums text-[var(--foreground)]">
                 {formatNumber(stats.completion)}
               </dd>
             </div>
@@ -362,14 +362,14 @@ export default function TokenUsage({
                   className="h-2.5 w-[3px] shrink-0 rounded-full"
                   style={{ backgroundColor: model.color }}
                 />
-                <span className="truncate font-mono text-[12px] text-[var(--foreground)]">
+                <span className="truncate font-mono text-body text-[var(--foreground)]">
                   {model.provider ? `${model.provider}/` : ""}{model.model}
                 </span>
                 <span className="eyebrow hidden shrink-0 sm:inline">
                   {model.creditSource || "estimated"}
                 </span>
               </div>
-              <span className="shrink-0 font-mono text-[12px] tabular-nums text-[var(--muted-foreground)]">
+              <span className="shrink-0 font-mono text-body tabular-nums text-[var(--muted-foreground)]">
                 <span className="text-[var(--foreground)]">{formatNumber(model.tokens)}</span>
                 {" · "}
                 {model.requests || 0}
@@ -387,7 +387,7 @@ export default function TokenUsage({
             </div>
           ))}
           {modelUsage.length === 0 && (
-            <p className="border-t border-[var(--hairline)] px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+            <p className="border-t border-[var(--hairline)] px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">
               No token usage in this range.
             </p>
           )}

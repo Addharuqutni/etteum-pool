@@ -5,22 +5,24 @@ import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
   // Press gives 3% back on scale — enough to feel mechanical, not bouncy.
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] font-medium transition-[color,background-color,border-color,transform] duration-150 [transition-timing-function:var(--ease-out-expo)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--background)] disabled:pointer-events-none disabled:opacity-45 disabled:active:scale-100 cursor-pointer",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-lead font-medium transition-[color,background-color,border-color,transform] duration-150 [transition-timing-function:var(--ease-out-expo)] active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--background)] disabled:pointer-events-none disabled:opacity-45 disabled:active:scale-100 cursor-pointer",
   {
     variants: {
       variant: {
         // The one filled-green button. Flat: the brand color IS the emphasis,
         // it doesn't need a halo underneath it too.
+        // Hover uses an explicit token, not /88 opacity — opacity drags the
+        // fill toward the page background and costs contrast.
         default:
-          "bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/88",
+          "bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary-hover)]",
         destructive:
-          "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:bg-[var(--destructive)]/88",
+          "bg-[var(--destructive)] text-[var(--destructive-foreground)] hover:bg-[var(--destructive-hover)]",
         outline:
-          "border border-[var(--border)] bg-transparent text-[var(--foreground)] hover:border-[var(--primary)]/40 hover:text-[var(--primary)]",
+          "border border-[var(--border)] bg-transparent text-[var(--foreground)] hover:border-[var(--primary)]/40 hover:text-[var(--primary-text)]",
         secondary:
           "bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--secondary)]/70 hover:text-[var(--foreground)]",
         ghost: "text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]",
-        link: "text-[var(--primary)] underline-offset-4 hover:underline",
+        link: "text-[var(--primary-text)] underline-offset-4 hover:underline",
       },
       size: {
         default: "h-9 px-3 min-h-[40px] md:min-h-0 md:h-8",

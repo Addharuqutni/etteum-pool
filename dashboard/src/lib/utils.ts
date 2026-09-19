@@ -1,5 +1,41 @@
 import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+/**
+ * tailwind-merge must be told about our custom type scale.
+ *
+ * By default `twMerge` treats any unknown `text-*` class as a text COLOR, so
+ * when `cn("text-body", "text-[var(--foreground)]")` runs it sees two color
+ * classes, keeps the last, and silently DROPS the font size. The element then
+ * inherits 16px — a failure that is invisible in the source and only shows up
+ * when you measure the rendered DOM.
+ *
+ * Registering the scale under the `font-size` group (and our display tier)
+ * makes `text-body` and `text-[var(--foreground)]` land in different groups,
+ * so both survive. Keep this list in sync with the `@theme inline` block in
+ * index.css.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [
+        {
+          text: [
+            "micro",
+            "meta",
+            "body",
+            "lead",
+            "title",
+            "display",
+            "stat-sm",
+            "stat",
+            "hero",
+          ],
+        },
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

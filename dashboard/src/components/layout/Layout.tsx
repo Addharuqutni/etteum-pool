@@ -25,12 +25,12 @@ export default function Layout({ onLogout }: LayoutProps) {
   }, [collapsed]);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       {/* Mobile scrim. Flat ink, no blur — this is a terminal tool, and a
           frosted pane over a data table just makes the data unreadable. */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-[var(--scrim)] md:hidden"
+          className="fixed inset-0 z-scrim bg-[var(--scrim)] md:hidden"
           onClick={() => setSidebarOpen(false)}
           aria-hidden
         />
@@ -49,14 +49,14 @@ export default function Layout({ onLogout }: LayoutProps) {
           4rem of dead space. */}
       <main
         className={
-          "h-screen overflow-y-auto px-4 pb-8 pt-16 transition-[margin] duration-200 [transition-timing-function:var(--ease-out-expo)] md:px-5 md:pt-5 " +
-          (collapsed ? "md:ml-14" : "md:ml-[228px]")
+          "h-dvh overflow-y-auto px-4 pb-8 pt-16 transition-[margin] duration-200 [transition-timing-function:var(--ease-out-expo)] md:px-5 md:pt-5 " +
+          (collapsed ? "md:ml-[var(--rail-collapsed)]" : "md:ml-[var(--rail-width)]")
         }
       >
         {/* Mobile menu button — 40px tap target, sits on the page rail */}
         <button
           onClick={() => setSidebarOpen(true)}
-          className="fixed top-3 left-3 z-30 md:hidden flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors duration-150 ease-out hover:border-[var(--primary)]/40 hover:text-[var(--primary)]"
+          className="fixed top-3 left-3 z-rail md:hidden flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] interactive hover:border-[var(--primary)]/40 hover:text-[var(--primary-text)]"
           aria-label="Open menu"
         >
           <Menu className="w-5 h-5" />

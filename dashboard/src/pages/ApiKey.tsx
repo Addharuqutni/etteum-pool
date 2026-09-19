@@ -260,12 +260,12 @@ export default function ApiKey() {
       {(message || shareUrl) && (
         <div className="space-y-2">
           {message && (
-            <p className="border-l-2 border-[var(--info)] bg-[var(--info)]/8 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
+            <p className="border-l-2 border-[var(--info)] bg-[var(--info)]/8 px-3 py-2 font-mono text-meta text-[var(--foreground)]">
               {message}
             </p>
           )}
           {shareUrl && (
-            <div className="flex items-center gap-2 border-l-2 border-[var(--primary)] bg-[var(--primary)]/8 px-3 py-2 font-mono text-[11px]">
+            <div className="flex items-center gap-2 border-l-2 border-[var(--primary)] bg-[var(--primary)]/8 px-3 py-2 font-mono text-meta">
               <Link2 className="w-3.5 h-3.5" />
               <span className="truncate text-[var(--muted-foreground)]">{shareUrl}</span>
               <Button size="sm" variant="outline" onClick={copyShareUrl}>
@@ -281,7 +281,7 @@ export default function ApiKey() {
         <div className="border-b border-[var(--border)] px-4 py-3">
           <h2 className="eyebrow flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5" /> Active key
-            <span className="ml-1 rounded-sm bg-[var(--sunken)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            <span className="ml-1 rounded-sm bg-[var(--sunken)] px-1.5 py-0.5 text-micro uppercase tracking-wider text-[var(--muted-foreground)]">
               {fromEnv ? "from .env" : `saved in DB (${legacySource})`}
             </span>
           </h2>
@@ -314,10 +314,10 @@ export default function ApiKey() {
               title="Copy key"
               aria-label="Copy key"
             >
-              {copiedId === -2 ? <Check className="w-4 h-4 text-[var(--success)]" /> : <Copy className="w-4 h-4" />}
+              {copiedId === -2 ? <Check className="w-4 h-4 text-[var(--success-text)]" /> : <Copy className="w-4 h-4" />}
             </Button>
           </div>
-          <p className="mt-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+          <p className="mt-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
             This is the key the pool accepts from API_KEY (.env) or the saved setting — the "primary" credential
             for /v1 proxy requests. Other encrypted keys (sk-etteum-*) are listed below with their own limits and ACL.
           </p>
@@ -361,24 +361,24 @@ export default function ApiKey() {
             </div>
             <div>
               <label className="eyebrow mb-1 block" htmlFor="n-allow-p">Allowed providers (comma/space)</label>
-              <Input id="n-allow-p" className="font-mono text-[11px]" value={draft.allowedProviders} onChange={(e) => setField("allowedProviders", e.target.value)} placeholder="codebuddy claude byok" />
+              <Input id="n-allow-p" className="font-mono text-meta" value={draft.allowedProviders} onChange={(e) => setField("allowedProviders", e.target.value)} placeholder="codebuddy claude byok" />
             </div>
             <div>
               <label className="eyebrow mb-1 block" htmlFor="n-deny-p">Denied providers</label>
-              <Input id="n-deny-p" className="font-mono text-[11px]" value={draft.deniedProviders} onChange={(e) => setField("deniedProviders", e.target.value)} placeholder="antigravity" />
+              <Input id="n-deny-p" className="font-mono text-meta" value={draft.deniedProviders} onChange={(e) => setField("deniedProviders", e.target.value)} placeholder="antigravity" />
             </div>
             <div>
               <label className="eyebrow mb-1 block" htmlFor="n-allow-m">Allowed models (substring)</label>
-              <Input id="n-allow-m" className="font-mono text-[11px]" value={draft.allowedModels} onChange={(e) => setField("allowedModels", e.target.value)} placeholder="claude-sonnet-4" />
+              <Input id="n-allow-m" className="font-mono text-meta" value={draft.allowedModels} onChange={(e) => setField("allowedModels", e.target.value)} placeholder="claude-sonnet-4" />
             </div>
             <div>
               <label className="eyebrow mb-1 block" htmlFor="n-deny-m">Denied models</label>
-              <Input id="n-deny-m" className="font-mono text-[11px]" value={draft.deniedModels} onChange={(e) => setField("deniedModels", e.target.value)} placeholder="grok-3" />
+              <Input id="n-deny-m" className="font-mono text-meta" value={draft.deniedModels} onChange={(e) => setField("deniedModels", e.target.value)} placeholder="grok-3" />
             </div>
             <Button onClick={handleCreate} size="sm" className="w-full">
               <Plus className="w-3.5 h-3.5" /> Create key
             </Button>
-            <p className="font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+            <p className="font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
               0 = unlimited. New key secret shows once after create — copy before leaving the page.
             </p>
           </div>
@@ -393,13 +393,13 @@ export default function ApiKey() {
               </h2>
               <div className="flex gap-2">
                 <Input
-                  className="w-40 font-mono text-[11px]"
+                  className="w-40 font-mono text-meta"
                   placeholder="filter provider"
                   value={filters.providers}
                   onChange={(e) => setFilters((f) => ({ ...f, providers: e.target.value }))}
                 />
                 <Input
-                  className="w-40 font-mono text-[11px]"
+                  className="w-40 font-mono text-meta"
                   placeholder="filter model"
                   value={filters.models}
                   onChange={(e) => setFilters((f) => ({ ...f, models: e.target.value }))}
@@ -408,9 +408,9 @@ export default function ApiKey() {
             </div>
           </div>
           {loading ? (
-            <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</p>
+            <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading...</p>
           ) : filteredKeys.length === 0 ? (
-            <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">No keys yet — create one on the left.</p>
+            <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">No keys yet — create one on the left.</p>
           ) : (
             <div className="max-h-[calc(100vh-16rem)] overflow-auto divide-y divide-[var(--border)]">
               {filteredKeys.map((k) => (
@@ -418,22 +418,22 @@ export default function ApiKey() {
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="truncate font-mono text-[12px] font-medium text-[var(--foreground)]">{k.name}</span>
-                        {k.revokedAt && <span className="rounded-sm bg-[var(--error)]/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--error)]">revoked</span>}
-                        {!k.enabled && !k.revokedAt && <span className="rounded-sm bg-[var(--warning)]/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--warning)]">disabled</span>}
-                        {k.shareEnabled && <span className="rounded-sm bg-[var(--primary)]/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-[var(--primary)]">shared</span>}
+                        <span className="truncate font-mono text-body font-medium text-[var(--foreground)]">{k.name}</span>
+                        {k.revokedAt && <span className="rounded-sm bg-[var(--error)]/10 px-1.5 py-0.5 font-mono text-micro uppercase tracking-wider text-[var(--error-text)]">revoked</span>}
+                        {!k.enabled && !k.revokedAt && <span className="rounded-sm bg-[var(--warning)]/10 px-1.5 py-0.5 font-mono text-micro uppercase tracking-wider text-[var(--warning-text)]">disabled</span>}
+                        {k.shareEnabled && <span className="rounded-sm bg-[var(--primary)]/10 px-1.5 py-0.5 font-mono text-micro uppercase tracking-wider text-[var(--primary-text)]">shared</span>}
                       </div>
-                      {k.description && <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]">{k.description}</p>}
+                      {k.description && <p className="mt-0.5 truncate text-meta text-[var(--muted-foreground)]">{k.description}</p>}
                       <div className="mt-1 flex items-center gap-1.5">
-                        <code className="font-mono text-[11px] text-[var(--muted-foreground)]">{k.keyPrefix}</code>
+                        <code className="font-mono text-meta text-[var(--muted-foreground)]">{k.keyPrefix}</code>
                         {showSecrets[k.id] ? (
-                          <span className="flex items-center gap-1 font-mono text-[11px] text-[var(--success)]">
+                          <span className="flex items-center gap-1 font-mono text-meta text-[var(--success-text)]">
                             <Lock className="w-3 h-3" />
                             revealed
                           </span>
                         ) : null}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-[var(--muted-foreground)]">
+                      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-micro text-[var(--muted-foreground)]">
                         <span>monthly {budgetCell(k, k.monthlyTokenBudget, 0)}</span>
                         <span>once {budgetCell(k, k.oneTimeTokenBudget, 0)}</span>
                         <span>rpm {k.rpmLimit > 0 ? k.rpmLimit : "∞"}</span>
@@ -445,7 +445,7 @@ export default function ApiKey() {
                     <div className="flex shrink-0 items-center gap-1.5">
                       {showSecrets[k.id] && (
                         <Button variant="outline" size="icon" title="Copy secret" onClick={() => handleCopy(k)}>
-                          {copiedId === k.id ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5" />}
+                          {copiedId === k.id ? <Check className="w-3.5 h-3.5 text-[var(--success-text)]" /> : <Copy className="w-3.5 h-3.5" />}
                         </Button>
                       )}
                       <Button variant="ghost" size="icon" title="Reveal secret (explicit credential endpoint)" onClick={() => handleReveal(k)} disabled={revealInFlight[k.id]}>
@@ -460,16 +460,16 @@ export default function ApiKey() {
                         title={k.enabled ? "Disable (stops new requests)" : "Enable"}
                         onClick={() => handleToggle(k)}
                       >
-                        <Power className={`w-3.5 h-3.5 ${k.enabled ? "text-[var(--success)]" : "text-[var(--muted-foreground)]"}`} />
+                        <Power className={`w-3.5 h-3.5 ${k.enabled ? "text-[var(--success-text)]" : "text-[var(--muted-foreground)]"}`} />
                       </Button>
                       <Button variant="ghost" size="icon" title={k.shareEnabled ? "Disable public share page" : "Enable public share page"} onClick={() => handleShareToggle(k)}>
-                        <Share2 className={`w-3.5 h-3.5 ${k.shareEnabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`} />
+                        <Share2 className={`w-3.5 h-3.5 ${k.shareEnabled ? "text-[var(--primary-text)]" : "text-[var(--muted-foreground)]"}`} />
                       </Button>
                       <Button variant="ghost" size="icon" title="Revoke key (stops working, row kept)" onClick={() => handleRevoke(k)}>
-                        <Ban className="w-3.5 h-3.5 text-[var(--warning)]" />
+                        <Ban className="w-3.5 h-3.5 text-[var(--warning-text)]" />
                       </Button>
                       <Button variant="ghost" size="icon" title="Delete key permanently" onClick={() => handleDelete(k)}>
-                        <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                        <Trash2 className="w-3.5 h-3.5 text-[var(--error-text)]" />
                       </Button>
                     </div>
                   </div>
@@ -485,7 +485,7 @@ export default function ApiKey() {
         <div className="border-b border-[var(--border)] px-4 py-3">
           <h2 className="eyebrow">Usage</h2>
         </div>
-        <pre className="overflow-x-auto bg-[var(--sunken)] px-4 py-3 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+        <pre className="overflow-x-auto bg-[var(--sunken)] px-4 py-3 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
 {`curl ${API_BASE}/v1/chat/completions \\
   -H "Authorization: Bearer sk-etteum-***" \\
   -H "Content-Type: application/json" \\

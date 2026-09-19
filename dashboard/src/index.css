@@ -35,9 +35,19 @@
   --popover: #181c19;
   --popover-foreground: #d8ded9;
 
-  /* Brand / primary — electric neon green */
+  /* Brand / primary — electric neon green.
+     Two roles, deliberately separate tokens:
+       --primary       FILL only — button/solid backgrounds, marks, chart bars.
+                       On dark it's neon; on light it stays a mid green because
+                       it's always behind --primary-foreground, never text.
+       --primary-text  TEXT/ICON color (links, active nav, ghost-button labels).
+                       On dark it equals --primary. On LIGHT it darkens to
+                       #007a3d because #00a857 only reaches 2.88:1 on the light
+                       background — a WCAG AA failure. #007a3d hits 5.04:1 on
+                       --background and 5.45:1 on --card. */
   --primary: #00ff88;
   --primary-foreground: #05130c;
+  --primary-text: #00ff88;
   --accent: #00ff88;
   --accent-foreground: #05130c;
 
@@ -46,18 +56,39 @@
   --secondary-foreground: #a8b2ab;
   --muted: #262b27;
   --muted-foreground: #8b948c;
+  /* Placeholder/disabled text. Deliberately its own token rather than
+     --muted-foreground at reduced opacity: `text-.../70` fell to 3.5:1 (dark)
+     and 2.8:1 (light). This value is dimmer than --muted-foreground yet still
+     clears 4.5:1 on both --background and --card. */
+  --muted-faint: #79817a;
 
-  /* Semantic status */
+  /* Semantic status — same two-role split as --primary.
+       --<name>       FILL only: solid backgrounds, chart strokes, bars.
+       --<name>-text  TEXT/ICON: badge labels, inline status words, log levels.
+     On dark both roles are the same value (neon reads fine on near-black).
+     On light the -text role darkens to clear WCAG AA on the light surfaces. */
   --success: #00ff88;
   --success-foreground: #1e1e1e;
+  --success-text: #00ff88;
   --warning: #ffb224;
   --warning-foreground: #1a1200;
+  --warning-text: #ffb224;
   --error: #ff5c5c;
   --error-foreground: #1a0606;
+  --error-text: #ff5c5c;
   --info: #38bdf8;
   --info-foreground: #04141d;
+  --info-text: #38bdf8;
   --destructive: #ff5c5c;
-  --destructive-foreground: #ffffff;
+  /* Dark text on the light coral fill, matching --error-foreground and every
+     other dark-mode on-fill token. White on #ff5c5c is only 3.03:1 — an AA
+     failure on a real button ("Stop all" in BotLogs). */
+  --destructive-foreground: #1a0606;
+  --destructive-text: #ff5c5c;
+  /* Explicit hover fill. Using /88 opacity instead would drag the fill
+     toward the page background and drop white-on-red below AA. */
+  --destructive-hover: #ff7a7a;
+  --primary-hover: #33ffa3;
 
   /* Lines & focus */
   --border: #242926;
@@ -80,13 +111,23 @@
   --sidebar-bg: #090b0a;
   --sidebar-border: #1c201d;
 
-  /* Chart palette (neon-leaning, well separated) */
+  /* Chart palette (neon-leaning, well separated).
+     Same two-role split as every other hue: these are FILL/STROKE values,
+     tuned to be visible as lines and bars. When a chart color is used as
+     TEXT (provider chips in Models.tsx), use the --chart-N-text variant —
+     in light mode none of the six clears AA as text otherwise. */
   --chart-1: #00ff88;
   --chart-2: #38bdf8;
   --chart-3: #a78bfa;
   --chart-4: #fbbf24;
   --chart-5: #fb7185;
   --chart-6: #2dd4bf;
+  --chart-1-text: #00ff88;
+  --chart-2-text: #38bdf8;
+  --chart-3-text: #a78bfa;
+  --chart-4-text: #fbbf24;
+  --chart-5-text: #fb7185;
+  --chart-6-text: #2dd4bf;
 
   /* Typography — mono for data/numerals (terminal voice), Plex Sans for prose.
      Both load from the <link> in index.html and degrade to the system stack
@@ -96,8 +137,115 @@
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 
+  /* ── Type scale ────────────────────────────────────────────────────────
+   * Five steps, and only five. The console runs small on purpose: density
+   * is the point, and anything at 15px+ reads as a marketing headline.
+   *
+   *   --text-micro  10px  eyebrows, badges, sidebar status, table headers
+   *   --text-meta   11px  secondary/meta text, descriptions, table cells
+   *   --text-body   12px  default body, dense table content, list rows
+   *   --text-lead   13px  inputs, buttons, dialog body — the comfortable read
+   *   --text-title  15px  page titles, dialog titles
+   *
+   * 9px and 14px are deliberately absent — they were drift, not intent.
+   * Line-height rides along so pairs never have to be specified by hand.
+   */
+  --text-micro: 10px;
+  --text-micro--line-height: 1.2;
+  --text-meta: 11px;
+  --text-meta--line-height: 1.45;
+  --text-body: 12px;
+  --text-body--line-height: 1.5;
+  --text-lead: 13px;
+  --text-lead--line-height: 1.5;
+  --text-title: 15px;
+  --text-title--line-height: 1.25;
+  /* ── Display tier ──────────────────────────────────────────────────────
+   * The ONLY sizes above the UI scale. Reserved for the single hero
+   * statistic on a summary surface (the dashboard stat strips) plus its
+   * unit suffix. An operator reads these from across the room; everything
+   * else in a list or panel stays on the scale above.
+   *   --text-display 18px  unit suffix ("%", "ms", "x")
+   *   --text-stat-sm 20px  stat figure inside a compact card / inline summary
+   *   --text-stat    26px  secondary hero figure (TokenUsage total)
+   *   --text-hero    40px  the one primary figure per view
+   */
+  --text-display: 18px;
+  --text-stat-sm: 20px;
+  --text-stat-sm--line-height: 1;
+  --text-stat: 26px;
+  --text-stat--line-height: 1;
+  --text-hero: 40px;
+  --text-hero--line-height: 1;
+
+  /* Tracking — uppercase mono needs air, lowercase prose does not. */
+  --tracking-eyebrow: 0.14em;  /* .eyebrow, badges-as-labels */
+  --tracking-caps: 0.08em;     /* uppercase titles, tabs, buttons */
+
+  /* ── Sidebar identity block ────────────────────────────────────────────
+   * The wordmark + connection label are a fixed lockup with their own tuned
+   * proportions; they sit outside the console type scale on purpose. Kept as
+   * tokens so the sidebar's type cannot drift when the scale changes.
+   */
+  --sidebar-wordmark-size: 13px;
+  --sidebar-status-size: 9px;
+  --sidebar-status-tracking: 0.16em;
+
   /* Radii — tight. Ops surfaces are panels, not pills. */
   --radius: 0.375rem;
+  --radius-none: 0px;      /* bars flush against a container edge */
+  --radius-sm: 4px;        /* badges, tab triggers, nested chips */
+  --radius-md: 6px;        /* the default: cards, buttons, inputs */
+  --radius-lg: 10px;       /* overlays only — dialog, command palette */
+
+  /* ── Z-index ladder ────────────────────────────────────────────────────
+   * Layering is a fixed ladder, never an ad-hoc number. Before adding a
+   * layer, ask which rung it belongs to; if it needs to sit between two
+   * rungs, the design is wrong, not the ladder.
+   *   base    — page flow, cards, tables, charts
+   *   sticky  — table headers, in-card toolbars that stick while scrolling
+   *   rail    — the fixed mobile menu button, above page content
+   *   scrim   — dimming layer behind a drawer/overlay
+   *   overlay — drawers, side panels, combobox popovers
+   *   modal   — dialogs, full-screen lightboxes. Always the top.
+   */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-rail: 30;
+  --z-scrim: 40;
+  --z-overlay: 50;
+  --z-modal: 60;
+
+  /* ── Layout rails ──────────────────────────────────────────────────────
+   * The sidebar is the only fixed-width rail in the console; content margin
+   * derives from it so the two can never drift apart.
+   */
+  --rail-width: 228px;
+  --rail-collapsed: 56px;
+
+  /* ── Spacing scale ─────────────────────────────────────────────────────
+   * A 4px rhythm. These are the ONLY steps — Tailwind's default numeric
+   * utilities (p-3, gap-2, …) already map onto this scale, so prefer them
+   * over arbitrary `[Npx]` values, which are a smell.
+   *   hairline 4 · tight 8 · row 12 · card 16 · section 24 · page 32
+   */
+  --space-hairline: 4px;
+  --space-tight: 8px;
+  --space-row: 12px;
+  --space-card: 16px;
+  --space-section: 24px;
+  --space-page: 32px;
+
+  /* Vertical rhythm tiers — see PageHeader/Layout for the live usage.
+     page-gap 16 (between a page's cards) · section-gap 24 (between blocks
+     inside a card) · row-gap 8/12 (inside a row). */
+  --gap-page: 16px;
+  --gap-section: 24px;
+
+  /* Step gutter — content indent that clears a numbered step marker in
+     wizard-style layouts (see integration/ClientCard). 30px = marker + label
+     column, so a step's body text hangs off the same edge as its title. */
+  --indent-step: 30px;
 }
 
 .light {
@@ -108,26 +256,42 @@
   --popover: #ffffff;
   --popover-foreground: #0a1610;
 
+  /* On-fill text. Dark uses dark-on-bright; light follows the same logic
+     (ink on green) because white on #00a857 is only 3.12:1 — an AA failure.
+     Dark-on-mid-green reads as intentional at any size, so the two themes now
+     agree instead of contradicting each other. */
   --primary: #00a857;
-  --primary-foreground: #ffffff;
+  --primary-foreground: #05130c;
+  --primary-text: #007a3d;
   --accent: #00a857;
-  --accent-foreground: #ffffff;
+  --accent-foreground: #05130c;
 
   --secondary: #e8efea;
   --secondary-foreground: #41524a;
   --muted: #eef3f0;
   --muted-foreground: #5e6f66;
+  --muted-faint: #64756c;
 
   --success: #15a34a;
-  --success-foreground: #ffffff;
+  --success-foreground: #05130c;
+  --success-text: #107c38;
   --warning: #c2710c;
-  --warning-foreground: #ffffff;
+  --warning-foreground: #1a1200;
+  --warning-text: #9d5c0a;
   --error: #dc2626;
   --error-foreground: #ffffff;
-  --info: #0284c7;
+  --error-text: #c81f1f;
+  /* --info fill darkens in light mode so white on it clears AA (5.93:1). */
+  --info: #0369a1;
   --info-foreground: #ffffff;
+  --info-text: #0270a9;
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
+  --destructive-text: #c81f1f;
+  --destructive-hover: #b91c1c;
+  /* Light-mode fills carry DARK text (see --primary-foreground), so hover goes
+     brighter, not darker — darkening the fill would eat the contrast. */
+  --primary-hover: #00b85f;
 
   --border: #dce5df;
   --input: #e4ebe7;
@@ -140,6 +304,24 @@
   --chart-grid: #e2eae5;
   --chart-axis: #6b7d73;
 
+  /* Chart palette in light mode. The dark values are neon, which is invisible
+     on a white card (--chart-4 was 1.57:1), so the whole palette is re-tuned
+     here — not just the text variants.
+       --chart-N       FILL/STROKE for lines & bars: >=3:1 on the white card.
+       --chart-N-text  TEXT/accent: >=4.5:1 on white AND on its own 12% tint. */
+  --chart-1: #00a85a;
+  --chart-2: #2e9bcb;
+  --chart-3: #9b81e8;
+  --chart-4: #b78b1a;
+  --chart-5: #e7687a;
+  --chart-6: #23a393;
+  --chart-1-text: #007d43;
+  --chart-2-text: #227397;
+  --chart-3-text: #7561af;
+  --chart-4-text: #886713;
+  --chart-5-text: #ad4e5c;
+  --chart-6-text: #1a796d;
+
   --sidebar-bg: #ffffff;
   --sidebar-border: #e4ebe7;
 
@@ -149,6 +331,84 @@
     0 1px 2px rgba(10, 22, 16, 0.05),
     0 12px 28px -14px rgba(10, 22, 16, 0.18);
   --shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* ── Tailwind bridge ──────────────────────────────────────────────────────
+ * Exposes the scales above as first-class Tailwind utilities so pages stop
+ * inventing their own values:
+ *   text-micro / text-meta / text-body / text-lead / text-title  (with lh)
+ *   rounded-sm / rounded-md / rounded-lg                          (from --radius-*)
+ *   z-base / z-sticky / z-rail / z-scrim / z-overlay / z-modal
+ *   ease-expo
+ * Anything NOT listed here falls back to Tailwind's default scale.
+ *
+ * ⚠ WHY THE TYPE SIZES ARE LITERALS, NOT var()
+ * A token defined as `--text-body: var(--text-body)` is a CYCLIC
+ * self-reference: CSS resolves it to the guaranteed-invalid value, the
+ * declaration is dropped, and Tailwind then emits a `text-body` utility with
+ * no usable font-size — so the element silently inherits 16px.
+ *
+ * `inline` means Tailwind emits `font-size: <this value>` at the call site.
+ * That only works if the value is concrete. So the sizes are repeated here as
+ * literals and MUST be kept in sync with the :root block above. The
+ * `--*-line-height` companions use var() safely, because those names are not
+ * shadowed (the theme key is `--text-X--line-height`).
+ */
+@theme inline {
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-micro: 10px;
+  --text-micro--line-height: var(--text-micro--line-height);
+  --text-meta: 11px;
+  --text-meta--line-height: var(--text-meta--line-height);
+  --text-body: 12px;
+  --text-body--line-height: var(--text-body--line-height);
+  --text-lead: 13px;
+  --text-lead--line-height: var(--text-lead--line-height);
+  --text-title: 15px;
+  --text-title--line-height: var(--text-title--line-height);
+  --text-display: 18px;
+  --text-stat-sm: 20px;
+  --text-stat-sm--line-height: var(--text-stat-sm--line-height);
+  --text-stat: 26px;
+  --text-stat--line-height: var(--text-stat--line-height);
+  --text-hero: 40px;
+  --text-hero--line-height: var(--text-hero--line-height);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --z-index-base: var(--z-base);
+  --z-index-sticky: var(--z-sticky);
+  --z-index-rail: var(--z-rail);
+  --z-index-scrim: var(--z-scrim);
+  --z-index-overlay: var(--z-overlay);
+  --z-index-modal: var(--z-modal);
+
+  --ease-expo: var(--ease-out-expo);
+
+  /* Tracking. Tailwind's `tracking-*` utilities read the `--tracking-*`
+     namespace, so registering these gives real `tracking-caps` /
+     `tracking-eyebrow` classes. Before this, 39 call sites wrote the raw
+     values (`tracking-[0.08em]`, `tracking-[0.14em]`) and they had already
+     begun to drift apart.
+     Literals, not var() — see the note above about cyclic self-references. */
+  --tracking-caps: 0.08em;
+  --tracking-eyebrow: 0.14em;
+
+  /* Chart palette. Bridge the FILL tokens as `--color-chart-N`, which gives
+     Tailwind-native `text-chart-1`, `bg-chart-1`, `border-chart-1`, etc.
+     The -text variants are intentionally NOT bridged: they are consumed as
+     `var(--chart-N-text)` in the provider-chip map, and adding a second
+     competing name for the same hue invites drift. */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
 }
 
 /* ── Base typography ──────────────────────────────────────────────────── */
@@ -175,12 +435,141 @@ samp,
    data. Consistent everywhere instead of hand-tuned per page. */
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1.2;
+  font-size: var(--text-micro);
+  line-height: var(--text-micro--line-height);
   font-weight: 500;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
   color: var(--muted-foreground);
+}
+
+/* ── Text primitives ──────────────────────────────────────────────────────
+ * The four text roles that got hand-rolled hundreds of times. Use these
+ * instead of re-deriving font-family + size + color per call site.
+ *
+ *   .t-title   15px mono caps  — page & panel titles
+ *   .t-label   10px mono caps  — eyebrows, table headers, small labels
+ *   .t-meta    11px mono       — secondary/meta lines, descriptions
+ *   .prose-body 12px sans      — running text, help copy, empty states
+ *
+ * Numeric data should always be mono + tabular. Reach for .t-num.
+ */
+
+/* Any number the operator will scan or compare: sizes, counts, latencies.
+   Tabular figures keep columns from jittering as values change. */
+.t-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+/* Running prose — the only place the sans face is the right answer. */
+.prose-body {
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  color: var(--foreground);
+}
+
+/* Help / caption text under a control. Sans on purpose: it's explanation,
+   not data, and mono paragraphs are exhausting at this size. */
+.hint {
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  line-height: var(--text-meta--line-height);
+  color: var(--muted-foreground);
+}
+
+/* ── Interaction primitives ───────────────────────────────────────────────
+ * Every hover/active surface in the console animates the SAME two things
+ * with the SAME curve. Without this, a page ends up with three different
+ * hover timings and the whole thing feels loose.
+ *
+ * `.interactive`  — the standard hover+press surface (rows, cards, tiles)
+ * `.focus-ring`   — the one focus treatment; matches ui/* components
+ */
+.interactive {
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.interactive:hover {
+  transition-duration: 0ms; /* hover-in is instant; the exit eases back out */
+}
+
+/* Keyboard focus must be unmistakable. Pointer focus never shows a ring —
+   that's the browser default we want to keep. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--background),
+    0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent);
+}
+
+/* ── Surface primitives ───────────────────────────────────────────────────
+ * The three recessed/lifted treatments used inside cards.
+ *   .sunken  — code blocks, log bodies, anything set INTO a card
+ *   .hairline-t / .hairline-b — row separators quieter than a full border
+ */
+.sunken {
+  background-color: var(--sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.hairline-t {
+  border-top: 1px solid var(--hairline);
+}
+
+.hairline-b {
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ── Empty / placeholder state ────────────────────────────────────────────
+ * One shape for "there is no data here yet" so every list doesn't invent
+ * its own dashed box, its own padding and its own centered sentence.
+ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-tight);
+  padding: var(--space-page) var(--space-card);
+  text-align: center;
+  color: var(--muted-foreground);
+}
+
+.empty-state svg {
+  height: 20px;
+  width: 20px;
+  opacity: 0.55;
+}
+
+/* ── Theme transition ─────────────────────────────────────────────────────
+ * Applied by ThemeProvider (useTheme.tsx) for ~300ms around a theme switch,
+ * then removed. Without this rule the class does nothing and every colour
+ * change snaps — and, worse, elements that already painted keep their old
+ * computed colour until something forces a repaint, which reads as a broken
+ * toggle in dark↔light.
+ *
+ * Scoped to the switch so the first paint is never animated. Transform and
+ * opacity are untouched; only the themed colour properties cross-fade.
+ */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition:
+    background-color var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base),
+    fill var(--transition-base),
+    stroke var(--transition-base) !important;
+  transition-delay: 0ms !important;
 }
 
 /* ── Atmosphere ───────────────────────────────────────────────────────────

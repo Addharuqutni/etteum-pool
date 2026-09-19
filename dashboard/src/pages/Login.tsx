@@ -37,12 +37,12 @@ export default function Login({ onLogin }: LoginProps) {
   return (
     /* Off-center on purpose: the panel sits on a left-anchored column so it
        reads as a terminal prompt, not a centered marketing hero. */
-    <div className="flex min-h-screen items-center justify-center p-4 sm:justify-start sm:px-[12vw]">
+    <div className="flex min-h-dvh items-center justify-center p-4 sm:justify-start sm:px-[12vw]">
       <div className="w-full max-w-[340px]">
         {/* Wordmark line — mono, inline, no icon tile with a glow behind it */}
         <div className="mb-5 flex items-baseline gap-2.5">
           <img src="/etteum.svg" alt="" className="h-5 w-5 self-center" />
-          <span className="font-mono text-[15px] font-semibold tracking-[0.08em] text-[var(--foreground)]">
+          <span className="font-mono text-title font-semibold tracking-caps text-[var(--foreground)]">
             ETTEUM
           </span>
           <span className="eyebrow">proxy pool</span>
@@ -85,7 +85,7 @@ export default function Login({ onLogin }: LoginProps) {
               <p
                 id="api-key-error"
                 role="alert"
-                className="border-l-2 border-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-[11px] text-[var(--error)]"
+                className="border-l-2 border-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-meta text-[var(--error-text)]"
               >
                 {error}
               </p>
@@ -98,7 +98,7 @@ export default function Login({ onLogin }: LoginProps) {
 
           <div className="flex items-center gap-2 border-t border-[var(--border)] px-4 py-2">
             <span className="eyebrow shrink-0">Endpoint</span>
-            <p className="truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+            <p className="truncate font-mono text-micro text-[var(--muted-foreground)]">
               {API_BASE || window.location.origin}
             </p>
           </div>

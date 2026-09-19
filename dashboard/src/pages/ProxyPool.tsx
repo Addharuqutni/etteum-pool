@@ -267,7 +267,7 @@ export default function ProxyPool() {
         title="Proxy Pool"
         meta={
           <>
-            <span className={pool.activeCount > 0 ? "text-[var(--success)]" : undefined}>
+            <span className={pool.activeCount > 0 ? "text-[var(--success-text)]" : undefined}>
               {pool.activeCount} active
             </span>
             <span aria-hidden className="text-[var(--border)]">·</span>
@@ -287,7 +287,7 @@ export default function ProxyPool() {
               {checking ? "Checking…" : "Check all"}
             </Button>
             {pool.count > 0 && (
-              <Button variant="ghost" size="sm" onClick={handleClearAll} className="hover:text-[var(--destructive)]">
+              <Button variant="ghost" size="sm" onClick={handleClearAll} className="hover:text-[var(--destructive-text)]">
                 <Trash2 className="w-3.5 h-3.5" /> Clear
               </Button>
             )}
@@ -296,7 +296,7 @@ export default function ProxyPool() {
       />
 
       {message && (
-        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-meta text-[var(--foreground)]">
           {message}
         </p>
       )}
@@ -311,7 +311,7 @@ export default function ProxyPool() {
             </div>
             <div className="space-y-2 px-3 py-3">
               <textarea
-                className="h-[104px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                className="h-[104px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-meta leading-relaxed text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 placeholder={"one per line\nhttp://user:pass@host:port\nsocks5://host:port\nhost:8080"}
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
@@ -346,7 +346,7 @@ export default function ProxyPool() {
                   <label htmlFor="scrape-source" className="eyebrow mb-1 block">Source</label>
                   <Select
                     id="scrape-source"
-                    className="font-mono text-[11px]"
+                    className="font-mono text-meta"
                     value={scrapeSource}
                     onChange={(e) => setScrapeSource(e.target.value)}
                   >
@@ -359,7 +359,7 @@ export default function ProxyPool() {
                   <label htmlFor="scrape-region" className="eyebrow mb-1 block">Region</label>
                   <Select
                     id="scrape-region"
-                    className="font-mono text-[11px]"
+                    className="font-mono text-meta"
                     value={scrapeCountry}
                     onChange={(e) => setScrapeCountry(e.target.value)}
                   >
@@ -372,7 +372,7 @@ export default function ProxyPool() {
                   <label htmlFor="scrape-protocol" className="eyebrow mb-1 block">Protocol</label>
                   <Select
                     id="scrape-protocol"
-                    className="font-mono text-[11px]"
+                    className="font-mono text-meta"
                     value={scrapeProtocol}
                     onChange={(e) => setScrapeProtocol(e.target.value as typeof scrapeProtocol)}
                   >
@@ -394,7 +394,7 @@ export default function ProxyPool() {
                   />
                 </div>
               </div>
-              <label className="flex cursor-pointer items-start gap-2 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <label className="flex cursor-pointer items-start gap-2 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 <input
                   type="checkbox"
                   className="mt-0.5 accent-[var(--primary)]"
@@ -410,7 +410,7 @@ export default function ProxyPool() {
               {sourceResults && (
                 <div className="space-y-1 border-t border-[var(--hairline)] pt-2">
                   {sourceResults.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between gap-2 font-mono text-[10px]">
+                    <div key={s.id} className="flex items-center justify-between gap-2 font-mono text-micro">
                       <span className="flex items-center gap-1.5 text-[var(--muted-foreground)]">
                         <span
                           aria-hidden
@@ -433,14 +433,14 @@ export default function ProxyPool() {
         {/* Primary surface: the pool */}
         <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
           {loading ? (
-            <p className="px-3 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+            <p className="px-3 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading…</p>
           ) : pool.proxies.length === 0 ? (
-            <p className="px-3 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+            <p className="px-3 py-3 font-mono text-body text-[var(--muted-foreground)]">
               Pool empty — paste or scrape proxies to enable IP rotation.
             </p>
           ) : (
             <div className="max-h-[calc(100vh-14rem)] overflow-auto">
-              <table className="w-full border-collapse font-mono text-[12px]">
+              <table className="w-full border-collapse font-mono text-body">
                 <thead className="sticky-head">
                   <tr>
                     <th className="eyebrow px-4 py-2 text-left">Endpoint</th>
@@ -463,7 +463,7 @@ export default function ProxyPool() {
                         <span className="block truncate text-[var(--foreground)]" title={maskUrl(proxy.url)}>
                           {maskUrl(proxy.url)}
                         </span>
-                        <span className="text-[10px] uppercase tracking-[0.08em] text-[var(--muted-foreground)]">{proxy.type}</span>
+                        <span className="text-micro uppercase tracking-caps text-[var(--muted-foreground)]">{proxy.type}</span>
                       </td>
                       <td className="px-4 py-2">
                         <span className="inline-flex items-center gap-1.5" style={{ color: statusTone(proxy.status) }} title={proxy.errorMessage ?? proxy.status}>
@@ -475,15 +475,15 @@ export default function ProxyPool() {
                         {proxy.latencyMs == null ? "—" : proxy.latencyMs < 1000 ? `${proxy.latencyMs}ms` : `${(proxy.latencyMs / 1000).toFixed(1)}s`}
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums text-[var(--muted-foreground)] hidden md:table-cell">
-                        <span className="text-[var(--success)]">{proxy.successCount}</span>
+                        <span className="text-[var(--success-text)]">{proxy.successCount}</span>
                         {" / "}
-                        <span className={proxy.failCount > 0 ? "text-[var(--error)]" : ""}>{proxy.failCount}</span>
+                        <span className={proxy.failCount > 0 ? "text-[var(--error-text)]" : ""}>{proxy.failCount}</span>
                       </td>
                       <td className="px-4 py-2 hidden md:table-cell">
                         <Select
                           aria-label="Proxy usage"
                           title="Usage scope: all = model + auth"
-                          className="font-mono text-[11px]"
+                          className="font-mono text-meta"
                           value={proxy.usage || "all"}
                           onChange={(e) => handleUsage(proxy.id, e.target.value)}
                         >
@@ -504,7 +504,7 @@ export default function ProxyPool() {
                             <Minus className="w-3 h-3" />
                           </button>
                           <span
-                            className={`min-w-[1.5rem] text-center text-[11px] ${proxy.priority ? "text-[var(--primary)] font-semibold" : "text-[var(--muted-foreground)]"}`}
+                            className={`min-w-[1.5rem] text-center text-meta ${proxy.priority ? "text-[var(--primary-text)] font-semibold" : "text-[var(--muted-foreground)]"}`}
                             title={proxy.priority ? `Weight ${1 + proxy.priority}× vs priority 0` : "Default weight 1×"}
                           >
                             {proxy.priority || 0}
@@ -542,7 +542,7 @@ export default function ProxyPool() {
                             onClick={() => handleDelete(proxy.id)}
                             title="Delete"
                             aria-label="Delete proxy"
-                            className="hover:text-[var(--destructive)]"
+                            className="hover:text-[var(--destructive-text)]"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>

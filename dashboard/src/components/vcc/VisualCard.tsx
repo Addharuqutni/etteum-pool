@@ -18,7 +18,17 @@ interface VisualCardProps {
   showActions?: boolean;
 }
 
-// Brand logo SVGs
+// Brand logo SVGs.
+//
+// NOTE ON TYPE SCALE: this file is deliberately NOT on the console type scale.
+// A VisualCard is a depiction of a physical credit card — a self-contained
+// graphic with its own proportions, where the "text" is brand artwork (the
+// DISCOVER wordmark, the JCB blocks) laid out to mimic the real thing, not
+// interface copy an operator reads in a list. Sizing it from --text-* would
+// make the artwork wrong. Brand colors are likewise literal (the Mastercard
+// circles must be red/orange) and are exempt from the token rule.
+//
+// Nothing here should be copied into a normal page. Use the type scale there.
 function BrandLogo({ brand }: { brand: string }): ReactNode {
   const logos: Record<string, ReactNode> = {
     visa: (

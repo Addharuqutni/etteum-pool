@@ -370,7 +370,7 @@ export default function ImageStudio() {
   const totalImages = results.reduce((sum, r) => sum + r.urls.length, 0);
 
   return (
-    <div className="flex h-[calc(100vh-6rem)] flex-col gap-4 md:h-[calc(100vh-3rem)]">
+    <div className="flex h-[calc(100vh-6rem)] flex-col gap-3 md:h-[calc(100vh-3.25rem)] md:gap-4">
       <PageHeader
         title="Image Studio"
         meta={
@@ -378,7 +378,7 @@ export default function ImageStudio() {
             <>
               <span>{totalImages} results</span>
               <span aria-hidden className="text-[var(--border)]">·</span>
-              <span className="text-[var(--warning)]">{totalCredits} credits</span>
+              <span className="text-[var(--warning-text)]">{totalCredits} credits</span>
             </>
           ) : (
             <span>prompt assistant for Canva Magic Media</span>
@@ -397,7 +397,7 @@ export default function ImageStudio() {
               <select
                 value={assistModel}
                 onChange={(e) => setAssistModel(e.target.value)}
-                className="h-7 max-w-[140px] appearance-none truncate rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-6 text-[11px] text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
+                className="h-7 max-w-[140px] appearance-none truncate rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-6 text-meta text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
                 title="AI Assist Model"
               >
                 {groupedModels.map(([provider, list]) => (
@@ -419,7 +419,7 @@ export default function ImageStudio() {
               <button
                 type="button"
                 onClick={() => setGenType("image")}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-5 items-center gap-1 rounded px-1.5 text-micro transition-colors ${
                   genType === "image"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -431,7 +431,7 @@ export default function ImageStudio() {
               <button
                 type="button"
                 onClick={() => setGenType("video")}
-                className={`flex h-5 items-center gap-1 rounded px-1.5 text-[10px] transition-colors ${
+                className={`flex h-5 items-center gap-1 rounded px-1.5 text-micro transition-colors ${
                   genType === "video"
                     ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                     : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -452,7 +452,7 @@ export default function ImageStudio() {
                   type="button"
                   onClick={() => setN(v)}
                   disabled={genType === "video"}
-                  className={`flex h-5 w-5 items-center justify-center rounded text-[10px] transition-colors disabled:opacity-40 ${
+                  className={`flex h-5 w-5 items-center justify-center rounded text-micro transition-colors disabled:opacity-40 ${
                     n === v && genType !== "video"
                       ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                       : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
@@ -473,7 +473,7 @@ export default function ImageStudio() {
                   <select
                     value={aspectRatio}
                     onChange={(e) => setAspectRatio(e.target.value)}
-                    className="h-7 w-16 appearance-none rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-5 font-mono text-[11px] text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
+                    className="h-7 w-16 appearance-none rounded border border-[var(--border)] bg-[var(--background)] pl-2 pr-5 font-mono text-meta text-[var(--foreground)] focus:border-[var(--primary)]/50 focus:outline-none"
                     title="Aspect Ratio"
                   >
                 {ASPECT_RATIOS.map((r) => (
@@ -493,11 +493,11 @@ export default function ImageStudio() {
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--primary)]/10">
-                <Bot className="h-4 w-4 text-[var(--primary)]" />
+                <Bot className="h-4 w-4 text-[var(--primary-text)]" />
               </div>
               <div>
                 <h2 className="eyebrow text-[var(--foreground)]">Prompt Assistant</h2>
-                <p className="mt-1 font-mono text-[10px] text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-micro text-[var(--muted-foreground)]">
                   {messages.length === 0 ? "Siap bantu" : `${messages.length} pesan`}
                 </p>
               </div>
@@ -520,10 +520,10 @@ export default function ImageStudio() {
                 <div className="relative mb-4">
                   <div className="absolute inset-0 animate-pulse rounded-full bg-[var(--primary)]/10 blur-xl" />
                   <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[var(--primary)]/20 to-fuchsia-500/10 ring-1 ring-inset ring-[var(--primary)]/30">
-                    <Sparkles className="h-6 w-6 text-[var(--primary)]" />
+                    <Sparkles className="h-6 w-6 text-[var(--primary-text)]" />
                   </div>
                 </div>
-                <p className="mb-1 text-sm font-medium text-[var(--foreground)]">
+                <p className="mb-1 text-body font-medium text-[var(--foreground)]">
                   Mulai dengan ide gambarmu
                 </p>
                 <p className="max-w-xs text-xs leading-relaxed text-[var(--muted-foreground)]">
@@ -539,7 +539,7 @@ export default function ImageStudio() {
                     <button
                       key={sample}
                       onClick={() => sendMessage(sample)}
-                      className="rounded-full border border-[var(--border)] bg-[var(--background)] px-3 py-1 text-[11px] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/5 hover:text-[var(--foreground)]"
+                      className="rounded-full border border-[var(--border)] bg-[var(--background)] px-3 py-1 text-meta text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/5 hover:text-[var(--foreground)]"
                     >
                       {sample}
                     </button>
@@ -556,7 +556,7 @@ export default function ImageStudio() {
                 <div
                   className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full ${
                     msg.role === "user"
-                      ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+                      ? "bg-[var(--primary)]/15 text-[var(--primary-text)]"
                       : "bg-[var(--secondary)] text-[var(--muted-foreground)]"
                   }`}
                 >
@@ -567,7 +567,7 @@ export default function ImageStudio() {
                   )}
                 </div>
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm ${
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-body ${
                     msg.role === "user"
                       ? "rounded-tr-sm bg-[var(--primary)] text-[var(--primary-foreground)]"
                       : "rounded-tl-sm bg-[var(--secondary)] text-[var(--foreground)]"
@@ -612,8 +612,8 @@ export default function ImageStudio() {
               <div className="rounded-md border border-[var(--primary)]/30 bg-gradient-to-br from-[var(--primary)]/10 via-[var(--primary)]/5 to-transparent px-3 py-3">
                 <div className="mb-1.5 flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <Check className="h-3.5 w-3.5 text-[var(--primary)]" />
-                    <span className="eyebrow text-[var(--primary)]">
+                    <Check className="h-3.5 w-3.5 text-[var(--primary-text)]" />
+                    <span className="eyebrow text-[var(--primary-text)]">
                       Final Prompt Ready
                     </span>
                   </div>
@@ -643,7 +643,7 @@ export default function ImageStudio() {
                       <Sparkles className="h-4 w-4" />
                       Generate {genType === "video" ? "Video" : `${n} ${n === 1 ? "Image" : "Images"}`}
                       {genType !== "video" && (
-                        <span className="rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-mono">
+                        <span className="rounded bg-white/15 px-1.5 py-0.5 text-micro font-mono">
                           {aspectRatio}
                         </span>
                       )}
@@ -655,28 +655,30 @@ export default function ImageStudio() {
           </div>
 
           {error && (
-            <p className="border-t border-l-2 border-t-[var(--border)] border-l-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-[11px] text-[var(--error)]">
+            <p className="border-t border-l-2 border-t-[var(--border)] border-l-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-meta text-[var(--error-text)]">
               {error}
             </p>
           )}
 
           {/* Input */}
           <div className="border-t border-[var(--border)] bg-[var(--card)] p-3">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              placeholder="Tulis ide gambarmu... (Enter to send, Shift+Enter for newline)"
-              className="w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 text-[13px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
-              rows={2}
-            />
+            <div className="rounded-md border border-[var(--input)] bg-[var(--background)] transition-colors focus-within:border-[var(--ring)] focus-within:ring-2 focus-within:ring-[var(--ring)]/35">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder="Tulis ide gambarmu... (Enter to send, Shift+Enter for newline)"
+                className="w-full resize-none bg-transparent px-3 py-2 text-lead text-[var(--foreground)] placeholder:text-[var(--muted-faint)] outline-none"
+                rows={2}
+              />
+            </div>
             <Button
-              className="mt-2 w-full gap-2"
+              className="mt-2 w-full gap-2 font-medium"
               onClick={send}
               disabled={!input.trim() || thinking}
             >
@@ -701,11 +703,11 @@ export default function ImageStudio() {
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--success)]/10">
-                <ImageIcon className="h-4 w-4 text-[var(--success)]" />
+                <ImageIcon className="h-4 w-4 text-[var(--success-text)]" />
               </div>
               <div>
                 <h2 className="eyebrow text-[var(--foreground)]">Preview</h2>
-                <p className="mt-1 font-mono text-[10px] text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-micro text-[var(--muted-foreground)]">
                   {results.length === 0
                     ? "Belum ada hasil"
                     : `${results.length} ${results.length === 1 ? "generation" : "generations"}`}
@@ -718,7 +720,7 @@ export default function ImageStudio() {
                 size="sm"
                 onClick={clearHistory}
                 title="Hapus semua hasil"
-                className="gap-1.5 text-[var(--muted-foreground)] hover:text-[var(--error)]"
+                className="gap-1.5 text-[var(--muted-foreground)] hover:text-[var(--error-text)]"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 Clear
@@ -736,7 +738,7 @@ export default function ImageStudio() {
                       <ImageIcon className="h-7 w-7 text-[var(--muted-foreground)]" />
                     </div>
                   </div>
-                  <p className="mb-1 text-sm font-medium text-[var(--foreground)]">
+                  <p className="mb-1 text-body font-medium text-[var(--foreground)]">
                     Galeri masih kosong
                   </p>
                   <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
@@ -765,7 +767,7 @@ export default function ImageStudio() {
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           <Badge
                             variant={r.type === "video" ? "warning" : "secondary"}
-                            className="px-1.5 py-0 text-[10px]"
+                            className="px-1.5 py-0 text-micro"
                           >
                             {r.type === "video" ? (
                               <Video className="mr-1 h-2.5 w-2.5" />
@@ -774,17 +776,17 @@ export default function ImageStudio() {
                             )}
                             {r.type}
                           </Badge>
-                          <span className="rounded border border-[var(--border)] px-1.5 py-0 font-mono text-[10px] text-[var(--muted-foreground)]">
+                          <span className="rounded border border-[var(--border)] px-1.5 py-0 font-mono text-micro text-[var(--muted-foreground)]">
                             {r.aspectRatio}
                           </span>
-                          <span className="text-[10px] text-[var(--muted-foreground)]">
+                          <span className="text-micro text-[var(--muted-foreground)]">
                             {r.creditsUsed} credits
                           </span>
-                          <span className="text-[10px] text-[var(--muted-foreground)]">
+                          <span className="text-micro text-[var(--muted-foreground)]">
                             • {timeAgo(r.createdAt)}
                           </span>
                           {allBroken && (
-                            <Badge variant="warning" className="px-1.5 py-0 text-[10px]">
+                            <Badge variant="warning" className="px-1.5 py-0 text-micro">
                               link expired
                             </Badge>
                           )}
@@ -801,7 +803,7 @@ export default function ImageStudio() {
                         </button>
                         <button
                           onClick={() => removeResult(r.id)}
-                          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
+                          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--error)]/10 hover:text-[var(--error-text)]"
                           title="Hapus dari history"
                         >
                           <X className="h-3.5 w-3.5" />
@@ -833,9 +835,9 @@ export default function ImageStudio() {
                             {broken ? (
                               <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 p-3 text-center">
                                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--warning)]/10">
-                                  <ImageIcon className="h-4 w-4 text-[var(--warning)]" />
+                                  <ImageIcon className="h-4 w-4 text-[var(--warning-text)]" />
                                 </div>
-                                <p className="text-[10px] text-[var(--muted-foreground)]">
+                                <p className="text-micro text-[var(--muted-foreground)]">
                                   Link kedaluwarsa
                                 </p>
                               </div>
@@ -873,7 +875,7 @@ export default function ImageStudio() {
                                 >
                                   <Download className="h-4 w-4" />
                                 </button>
-                                <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10px] text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+                                <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-micro text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
                                   #{i + 1}
                                 </span>
                               </>
@@ -892,12 +894,12 @@ export default function ImageStudio() {
                 <div className="text-center">
                   <div className="relative mx-auto mb-3 h-10 w-10">
                     <div className="absolute inset-0 animate-ping rounded-full bg-[var(--primary)]/30" />
-                    <Loader2 className="relative h-10 w-10 animate-spin text-[var(--primary)]" />
+                    <Loader2 className="relative h-10 w-10 animate-spin text-[var(--primary-text)]" />
                   </div>
-                  <p className="text-sm font-medium text-[var(--foreground)]">
+                  <p className="text-body font-medium text-[var(--foreground)]">
                     Generating {genType}...
                   </p>
-                  <p className="mt-1.5 font-mono text-[11px] text-[var(--muted-foreground)]">
+                  <p className="mt-1.5 font-mono text-meta text-[var(--muted-foreground)]">
                     Canva Magic Media sedang melukis
                   </p>
                 </div>
@@ -911,7 +913,7 @@ export default function ImageStudio() {
       {lightbox && (
         <div
           onClick={() => setLightbox(null)}
-          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/95 p-8 backdrop-blur-sm"
+          className="fixed inset-0 z-modal flex cursor-zoom-out items-center justify-center bg-black/95 p-8 backdrop-blur-sm"
         >
           <button
             className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition-colors hover:bg-white/20"

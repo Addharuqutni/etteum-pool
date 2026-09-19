@@ -201,7 +201,7 @@ export default function Combos() {
       />
 
       {message && (
-        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-meta text-[var(--foreground)]">
           {message}
         </p>
       )}
@@ -235,12 +235,12 @@ export default function Combos() {
               <label htmlFor="combo-name" className="eyebrow mb-1.5 block">Name</label>
               <input
                 id="combo-name"
-                className="w-full rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                className="w-full rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 placeholder="my-model-combo"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
-              <p className="mt-1 font-mono text-[11px] text-[var(--muted-foreground)]">
+              <p className="mt-1 font-mono text-meta text-[var(--muted-foreground)]">
                 Clients request this model name.
               </p>
             </div>
@@ -249,20 +249,20 @@ export default function Combos() {
                   words once and the rows carry the rank from there. */}
               <div className="mb-1.5 flex items-baseline justify-between gap-3">
                 <span className="eyebrow">Fallback order</span>
-                <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                <span className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                   {form.targets.length > 0
                     ? `${form.targets.length} in chain · ${models.length} available`
                     : `${models.length} available`}
                 </span>
               </div>
-              <p className="mb-2 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-                Requests go to <span className="text-[var(--primary)]">#1</span>. Each model below it
+              <p className="mb-2 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
+                Requests go to <span className="text-[var(--primary-text)]">#1</span>. Each model below it
                 is tried only when the one above fails.
               </p>
 
               {form.targets.length > 1 && (
                 <p
-                  className="mb-2 truncate font-mono text-[11px] text-[var(--muted-foreground)]"
+                  className="mb-2 truncate font-mono text-meta text-[var(--muted-foreground)]"
                   title={form.targets.join(" → ")}
                 >
                   {form.targets.join(" → ")}
@@ -271,7 +271,7 @@ export default function Combos() {
 
               <div className="space-y-1.5">
                 {form.targets.length === 0 && (
-                  <p className="rounded-md border border-dashed border-[var(--border)] px-2.5 py-3 font-mono text-[11px] text-[var(--muted-foreground)]">
+                  <p className="rounded-md border border-dashed border-[var(--border)] px-2.5 py-3 font-mono text-meta text-[var(--muted-foreground)]">
                     Chain is empty — pick a model below to make it the primary.
                   </p>
                 )}
@@ -349,9 +349,9 @@ export default function Combos() {
 
                       <span
                         className={cn(
-                          "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums",
+                          "shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-micro font-medium tabular-nums",
                           primary
-                            ? "bg-[var(--primary)]/15 text-[var(--primary)]"
+                            ? "bg-[var(--primary)]/15 text-[var(--primary-text)]"
                             : "text-[var(--muted-foreground)]"
                         )}
                       >
@@ -360,12 +360,12 @@ export default function Combos() {
 
                       <div className="flex min-w-0 flex-1 flex-col">
                         <span
-                          className="truncate font-mono text-[12px] text-[var(--foreground)]"
+                          className="truncate font-mono text-body text-[var(--foreground)]"
                           title={t}
                         >
                           {t}
                         </span>
-                        <span className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--muted-foreground)]">
+                        <span className="flex items-center gap-1.5 font-mono text-micro text-[var(--muted-foreground)]">
                           {tag && (
                             <>
                               <span
@@ -379,7 +379,7 @@ export default function Combos() {
                               </span>
                             </>
                           )}
-                          <span className={primary ? "text-[var(--primary)]" : undefined}>
+                          <span className={primary ? "text-[var(--primary-text)]" : undefined}>
                             {rankLabel(i)}
                           </span>
                         </span>
@@ -413,7 +413,7 @@ export default function Combos() {
                           disabled={form.targets.length === 1}
                           title={form.targets.length === 1 ? "A combo needs one model" : "Remove"}
                           aria-label={`Remove ${t} from chain`}
-                          className="hover:text-[var(--destructive)]"
+                          className="hover:text-[var(--destructive-text)]"
                         >
                           <X className="w-3.5 h-3.5" />
                         </Button>
@@ -455,9 +455,9 @@ export default function Combos() {
 
       <Card className="overflow-hidden">
         {loading ? (
-          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+          <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading…</p>
         ) : combos.length === 0 ? (
-          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+          <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">
             No combos yet — create one to chain models with fallback.
           </p>
         ) : (
@@ -467,7 +467,7 @@ export default function Combos() {
                 key={combo.id}
                 className={`flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-3 py-2 transition-colors duration-150 ease-out first:border-t-0 hover:bg-[var(--secondary)]/40 ${combo.enabled ? "" : "opacity-55"}`}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-2.5 font-mono text-[12px]">
+                <div className="flex min-w-0 flex-1 items-center gap-2.5 font-mono text-body">
                   <span className="w-7 shrink-0 tabular-nums text-[var(--muted-foreground)]">{i + 1}</span>
                   <span
                     aria-hidden
@@ -508,7 +508,7 @@ export default function Combos() {
                     onClick={() => handleDelete(combo)}
                     title="Delete"
                     aria-label="Delete combo"
-                    className="hover:text-[var(--destructive)]"
+                    className="hover:text-[var(--destructive-text)]"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>

@@ -397,7 +397,7 @@ export default function Requests() {
             <Select
               value={provider}
               onChange={(e) => changeProvider(e.target.value)}
-              className="w-auto font-mono text-[12px]"
+              className="w-auto font-mono text-body"
               aria-label="Filter by provider"
             >
               <option value="all">all providers</option>
@@ -410,7 +410,7 @@ export default function Requests() {
             <Select
               value={status}
               onChange={(e) => changeStatus(e.target.value)}
-              className="w-auto font-mono text-[12px]"
+              className="w-auto font-mono text-body"
               aria-label="Filter by status"
             >
               <option value="all">All statuses</option>
@@ -420,7 +420,7 @@ export default function Requests() {
             <Select
               value={String(perPage)}
               onChange={(e) => changePerPage(Number(e.target.value))}
-              className="w-auto font-mono text-[12px]"
+              className="w-auto font-mono text-body"
               aria-label="Rows per page"
             >
               {PER_PAGE_OPTIONS.map((option) => (
@@ -468,7 +468,7 @@ export default function Requests() {
           elevated surface. Sticky header, mono body, numerals right-aligned. */}
       <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
         <div className="max-h-[calc(100vh-13rem)] overflow-auto">
-          <table className="w-full border-collapse font-mono text-[12px]">
+          <table className="w-full border-collapse font-mono text-body">
             <thead className="sticky-head">
               <tr>
                 <th className="eyebrow px-4 py-2 text-left">Time</th>
@@ -512,12 +512,12 @@ export default function Requests() {
         </div>
         {total > 0 && (
           <div className="flex items-center justify-between border-t border-[var(--border)] px-3 py-2">
-            <p className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+            <p className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
               {(page - 1) * perPage + 1}–{Math.min(page * perPage, total)} of {total}
             </p>
             <div className="flex items-center gap-1.5">
               <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{pageCount}</span>
+              <span className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{page}/{pageCount}</span>
               <Button variant="ghost" size="sm" disabled={page >= pageCount} onClick={() => setPage(page + 1)}>Next</Button>
             </div>
           </div>
@@ -525,21 +525,21 @@ export default function Requests() {
       </Card>
 
       {selected && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/55" onClick={() => setSelected(null)}>
+        <div className="fixed inset-0 z-overlay flex justify-end bg-[var(--scrim)]" onClick={() => setSelected(null)}>
           <aside
             className="h-full w-full max-w-[520px] overflow-y-auto border-l border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-raised)]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
+            <div className="sticky top-0 z-sticky flex items-start justify-between gap-3 border-b border-[var(--border)] bg-[var(--card)] px-4 py-3">
               <div className="min-w-0">
-                <h2 className="truncate font-mono text-[13px] font-semibold text-[var(--foreground)]">
+                <h2 className="truncate font-mono text-lead font-semibold text-[var(--foreground)]">
                   {selected.model || "Request"}
                 </h2>
-                <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                   #{selected.id} · {formatDateTimeID(selected.createdAt)}
                 </p>
                 <button
-                  className="mt-1 font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)]"
+                  className="mt-1 font-mono text-micro uppercase tracking-eyebrow text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary-text)]"
                   onClick={() => navigator.clipboard.writeText(formatBody(selected))}
                   title="Copy the full log payload as JSON"
                 >
@@ -556,7 +556,7 @@ export default function Requests() {
             </div>
 
             <div className="px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-meta text-[var(--muted-foreground)]">
                 <Badge variant={getStatusColor(selected.status)}>{selected.status}</Badge>
                 <span>HTTP {selected.status === "success" ? 200 : 503}</span>
                 <span aria-hidden className="text-[var(--border)]">·</span>
@@ -572,7 +572,7 @@ export default function Requests() {
                 <Metric label="Credit" value={(selected.creditsUsed || 0).toFixed(2)} tone="var(--warning)" />
               </div>
 
-              <dl className="mt-3 space-y-1 border-l-2 border-[var(--border)] pl-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">
+              <dl className="mt-3 space-y-1 border-l-2 border-[var(--border)] pl-2.5 font-mono text-meta text-[var(--muted-foreground)]">
                 <div>
                   Credit source <span className="text-[var(--foreground)]">{getCreditMeta(selected).creditSource || "unknown"}</span>
                   {getCreditMeta(selected).creditUnit && <> · unit <span className="text-[var(--foreground)]">{getCreditMeta(selected).creditUnit}</span></>}
@@ -589,20 +589,20 @@ export default function Requests() {
 
               <div className="mt-4">
                 <p className="eyebrow">Account</p>
-                <p className="mt-1 font-mono text-[12px] text-[var(--foreground)]">{selected.accountEmail || `#${selected.accountId}`}</p>
-                <p className="mt-0.5 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-body text-[var(--foreground)]">{selected.accountEmail || `#${selected.accountId}`}</p>
+                <p className="mt-0.5 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                   credit {selected.accountQuotaBefore ?? 0} → {selected.accountQuotaAfter ?? 0}
                 </p>
               </div>
 
               {selected.errorMessage && (
-                <p className="mt-4 border-l-2 border-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-[11px] text-[var(--error)]">
+                <p className="mt-4 border-l-2 border-[var(--error)] bg-[var(--error)]/8 px-3 py-2 font-mono text-meta text-[var(--error-text)]">
                   {selected.errorMessage}
                 </p>
               )}
 
               {detailLoading && selected.requestBody === undefined ? (
-                <div className="mt-4 flex items-center gap-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+                <div className="mt-4 flex items-center gap-2 font-mono text-meta text-[var(--muted-foreground)]">
                   <RefreshCw className="w-3 h-3 animate-spin" /> loading bodies…
                 </div>
               ) : (
@@ -630,7 +630,7 @@ export default function Requests() {
               <p className="eyebrow">Log Storage & Telemetry</p>
 
               <label className="mt-2.5 flex cursor-pointer items-center justify-between gap-3">
-                <span className="font-mono text-[11px] text-[var(--foreground)]">Simpan Request & Response Body</span>
+                <span className="font-mono text-meta text-[var(--foreground)]">Simpan Request & Response Body</span>
                 <input
                   type="checkbox"
                   className="accent-[var(--primary)]"
@@ -640,7 +640,7 @@ export default function Requests() {
               </label>
 
               <label className="mt-2 flex cursor-pointer items-center justify-between gap-3">
-                <span className="font-mono text-[11px] text-[var(--foreground)]">Redaksi Data Sensitif</span>
+                <span className="font-mono text-meta text-[var(--foreground)]">Redaksi Data Sensitif</span>
                 <input
                   type="checkbox"
                   className="accent-[var(--primary)]"
@@ -660,7 +660,7 @@ export default function Requests() {
                     onChange={(e) => setConfigValue("request_log_body_max_bytes", e.target.value)}
                     className="mt-1.5 font-mono tabular-nums"
                   />
-                  <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                  <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                     Byte. Default: <code>65536</code>.
                   </p>
                 </div>
@@ -674,7 +674,7 @@ export default function Requests() {
                     onChange={(e) => setConfigValue("request_log_max_records", e.target.value)}
                     className="mt-1.5 font-mono tabular-nums"
                   />
-                  <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                  <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                     Default: <code>500</code>. <code>0</code> = tanpa batas.
                   </p>
                 </div>
@@ -685,7 +685,7 @@ export default function Requests() {
                 <Select
                   value={configForm.request_log_retention_days}
                   onChange={(e) => setConfigValue("request_log_retention_days", e.target.value)}
-                  className="mt-1.5 font-mono text-[12px]"
+                  className="mt-1.5 font-mono text-body"
                   aria-label="Retensi hari"
                 >
                   {RETENTION_OPTIONS.map((option) => (
@@ -694,7 +694,7 @@ export default function Requests() {
                     </option>
                   ))}
                 </Select>
-                <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                   <code>Selamanya</code> = simpan tanpa batas waktu.
                 </p>
               </div>
@@ -710,7 +710,7 @@ export default function Requests() {
                   <Trash2 className="w-3.5 h-3.5" /> Bersihkan Semua Log
                 </Button>
               </div>
-              <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="mt-1.5 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                 Pangkas mengikuti retensi tersimpan; bersihkan menghapus seluruh isi.
               </p>
             </section>
@@ -722,7 +722,7 @@ export default function Requests() {
                 <Select
                   value={String(perPage)}
                   onChange={(e) => changePerPage(Number(e.target.value))}
-                  className="mt-1.5 font-mono text-[12px]"
+                  className="mt-1.5 font-mono text-body"
                   aria-label="Baris per halaman"
                 >
                   {PER_PAGE_OPTIONS.map((option) => (
@@ -731,13 +731,13 @@ export default function Requests() {
                     </option>
                   ))}
                 </Select>
-                <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                   Disimpan di peramban ini.
                 </p>
               </div>
             </section>
 
-            {configMessage && <p className="font-mono text-[11px] text-[var(--primary)]">{configMessage}</p>}
+            {configMessage && <p className="font-mono text-meta text-[var(--primary-text)]">{configMessage}</p>}
           </div>
 
           <DialogFooter className="mt-4 gap-2">
@@ -778,7 +778,7 @@ function Metric({ label, value, tone }: { label: string; value: string | number;
     <div className="px-2.5 py-2">
       <p className="eyebrow">{label}</p>
       <p
-        className="mt-1 font-mono text-[13px] font-semibold tabular-nums"
+        className="mt-1 font-mono text-lead font-semibold tabular-nums"
         style={{ color: tone || "var(--foreground)" }}
       >
         {value}
@@ -846,7 +846,7 @@ function CompressionPanel({
   // No real savings on this request — show a muted "ran but no-op" line.
   if (saved <= 0) {
     return (
-      <p className="mt-3 border-l-2 border-[var(--border)] pl-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">
+      <p className="mt-3 border-l-2 border-[var(--border)] pl-2.5 font-mono text-meta text-[var(--muted-foreground)]">
         Compression ran in {durationMs}ms — nothing compressible this turn.
       </p>
     );
@@ -855,26 +855,26 @@ function CompressionPanel({
   return (
     <div className="mt-3 border-l-2 border-[var(--success)] bg-[var(--success)]/5 px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="eyebrow text-[var(--success)]">Compression</p>
-        <p className="font-mono text-[10px] tabular-nums text-[var(--muted-foreground)]">{durationMs}ms</p>
+        <p className="eyebrow text-[var(--success-text)]">Compression</p>
+        <p className="font-mono text-micro tabular-nums text-[var(--muted-foreground)]">{durationMs}ms</p>
       </div>
 
       <div className="mt-1.5 flex items-baseline gap-2">
-        <span className="font-mono text-xl font-semibold tabular-nums text-[var(--success)]">−{formatNum(saved)}</span>
-        <span className="font-mono text-[11px] text-[var(--muted-foreground)]">tokens</span>
-        <span className="ml-auto font-mono text-[13px] font-semibold tabular-nums text-[var(--success)]">{displayPct.toFixed(2)}%</span>
+        <span className="font-mono text-stat-sm font-semibold tabular-nums text-[var(--success-text)]">−{formatNum(saved)}</span>
+        <span className="font-mono text-meta text-[var(--muted-foreground)]">tokens</span>
+        <span className="ml-auto font-mono text-lead font-semibold tabular-nums text-[var(--success-text)]">{displayPct.toFixed(2)}%</span>
       </div>
 
       <div
-        className="mt-1 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]"
+        className="mt-1 font-mono text-meta tabular-nums text-[var(--muted-foreground)]"
         title={
           hasProviderTruth
             ? `Anchored to provider-reported prompt_tokens (${formatNum(promptTokens!)}). Internal estimate was ${formatNum(tokensBefore)} → ${formatNum(tokensAfter)}.`
             : "Internal char/4 estimate (provider usage not available)"
         }
       >
-        {formatNum(displayBefore)} <span className="opacity-50">→</span> {formatNum(displayAfter)}
-        {hasProviderTruth && <span className="ml-1 opacity-50">· actual</span>}
+        {formatNum(displayBefore)} <span className="text-[var(--muted-foreground)]">→</span> {formatNum(displayAfter)}
+        {hasProviderTruth && <span className="ml-1 text-[var(--muted-foreground)]">· actual</span>}
       </div>
 
       {techEntries.length > 0 && (
@@ -883,7 +883,7 @@ function CompressionPanel({
           {techEntries.map(([key, value]) => {
             const pct = saved > 0 ? (value / saved) * 100 : 0;
             return (
-              <div key={key} className="mt-1 flex items-center gap-2 font-mono text-[11px]">
+              <div key={key} className="mt-1 flex items-center gap-2 font-mono text-meta">
                 <span className="flex-1 truncate text-[var(--foreground)]">{TECHNIQUE_LABELS[key]}</span>
                 <div className="h-px w-16 bg-[var(--border)]">
                   <div className="h-full bg-[var(--success)]" style={{ width: `${Math.min(100, pct)}%` }} />
@@ -898,14 +898,14 @@ function CompressionPanel({
       {filterEntries.length > 0 && (
         <details className="mt-2 group">
           <summary className="eyebrow cursor-pointer hover:text-[var(--foreground)]">
-            RTK filters ({filterEntries.length}) <span className="opacity-50 group-open:hidden">▸</span><span className="opacity-50 hidden group-open:inline">▾</span>
+            RTK filters ({filterEntries.length}) <span className="text-[var(--muted-faint)] group-open:hidden">▸</span><span className="hidden text-[var(--muted-faint)] group-open:inline">▾</span>
           </summary>
           <div className="mt-1">
             {filterEntries.map(([name, value]) => {
               const rtkTotal = byTechnique.rtk ?? 0;
               const pct = rtkTotal > 0 ? (value / rtkTotal) * 100 : 0;
               return (
-                <div key={name} className="mt-1 flex items-center gap-2 font-mono text-[11px]">
+                <div key={name} className="mt-1 flex items-center gap-2 font-mono text-meta">
                   <span className="flex-1 truncate pl-2 text-[var(--muted-foreground)]">{RTK_FILTER_LABELS[name] ?? name}</span>
                   <div className="h-px w-16 bg-[var(--border)]">
                     <div className="h-full bg-[var(--success)]/60" style={{ width: `${Math.min(100, pct)}%` }} />
@@ -936,29 +936,29 @@ function PonytailPanel({
   return (
     <div className="mt-2.5 border-t border-[var(--hairline)] pt-2">
       <p className="eyebrow">Ponytail (lazy-dev ruleset)</p>
-      <div className="mt-1 flex items-center gap-2 font-mono text-[11px]">
+      <div className="mt-1 flex items-center gap-2 font-mono text-meta">
         <span className="flex-1 text-[var(--foreground)]">Input overhead</span>
         <span
           className={`w-14 text-right tabular-nums ${
-            overhead < 0 ? "text-[var(--error)]" : "text-[var(--muted-foreground)]"
+            overhead < 0 ? "text-[var(--error-text)]" : "text-[var(--muted-foreground)]"
           }`}
         >
           {overhead < 0 ? "+" : ""}
           {formatNum(overhead)}
         </span>
       </div>
-      <div className="mt-1 flex items-center gap-2 font-mono text-[11px]">
+      <div className="mt-1 flex items-center gap-2 font-mono text-meta">
         <span className="flex-1 text-[var(--foreground)]">Output markers</span>
         <span
           className={`w-14 text-right tabular-nums ${
-            markerCount > 0 ? "text-[var(--success)]" : "text-[var(--muted-foreground)]"
+            markerCount > 0 ? "text-[var(--success-text)]" : "text-[var(--muted-foreground)]"
           }`}
         >
           {markerCount}
         </span>
       </div>
       {netPositive && (
-        <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+        <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
           Ruleset injected (+{formatNum(Math.abs(overhead))} tokens overhead) → model emitted{" "}
           {markerCount} deliberate corner-cut marker{markerCount !== 1 ? "s" : ""}.
         </p>
@@ -967,23 +967,23 @@ function PonytailPanel({
         <details className="mt-1 group">
           <summary className="eyebrow cursor-pointer hover:text-[var(--foreground)]">
             Marker details ({hits.length}){" "}
-            <span className="opacity-50 group-open:hidden">▸</span>
-            <span className="opacity-50 hidden group-open:inline">▾</span>
+            <span className="text-[var(--muted-faint)] group-open:hidden">▸</span>
+            <span className="hidden text-[var(--muted-faint)] group-open:inline">▾</span>
           </summary>
           <div className="mt-1 space-y-1">
             {hits.map((hit, i) => (
               <div
                 key={i}
-                className="border-l border-[var(--border)] bg-[var(--secondary)]/40 px-2 py-1 font-mono text-[11px]"
+                className="border-l border-[var(--border)] bg-[var(--secondary)]/40 px-2 py-1 font-mono text-meta"
               >
                 <div className="flex items-center gap-1">
-                  <span className="text-[var(--primary)]">ponytail:</span>
+                  <span className="text-[var(--primary-text)]">ponytail:</span>
                   <span className="text-[var(--foreground)]">{hit.ceiling}</span>
                 </div>
                 <div className="text-[var(--muted-foreground)]">
                   → {hit.upgradePath}
                 </div>
-                <div className="text-[10px] text-[var(--muted-foreground)]/70">
+                <div className="text-micro text-[var(--muted-foreground)]">
                   @ {hit.location}
                 </div>
               </div>
@@ -1002,13 +1002,13 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
       <div className="mb-1.5 flex items-center justify-between">
         <p className="eyebrow">{title}</p>
         <button
-          className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)]"
+          className="font-mono text-micro uppercase tracking-eyebrow text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary-text)]"
           onClick={() => navigator.clipboard.writeText(text)}
         >
           Copy
         </button>
       </div>
-      <pre className="max-h-72 overflow-auto rounded-md border border-[var(--border)] bg-[var(--sunken)] p-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">{text}</pre>
+      <pre className="max-h-72 overflow-auto rounded-md border border-[var(--border)] bg-[var(--sunken)] p-2.5 text-meta leading-relaxed text-[var(--muted-foreground)]">{text}</pre>
     </div>
   );
 }

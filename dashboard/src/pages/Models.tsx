@@ -18,14 +18,17 @@ interface ModelData {
 
 // Provider accents come from the chart palette so they stay in sync with the
 // theme (and with the same providers plotted on the usage chart).
+// These render as TEXT, so they use the --chart-N-text variants: the plain
+// fills are tuned for lines/bars and none of the six clears WCAG AA as text
+// on the light card. The tint + border keep the fill token.
 const providerColors: Record<string, string> = {
-  codebuddy: "bg-[var(--chart-3)]/12 text-[var(--chart-3)] border-[var(--chart-3)]/30",
-  "codebuddy-china": "bg-[var(--chart-5)]/12 text-[var(--chart-5)] border-[var(--chart-5)]/30",
-  canva: "bg-[var(--chart-6)]/12 text-[var(--chart-6)] border-[var(--chart-6)]/30",
-  codex: "bg-[var(--chart-1)]/12 text-[var(--chart-1)] border-[var(--chart-1)]/30",
-  "grok-cli": "bg-[var(--chart-2)]/12 text-[var(--chart-2)] border-[var(--chart-2)]/30",
-  claude: "bg-[var(--chart-4)]/12 text-[var(--chart-4)] border-[var(--chart-4)]/30",
-  byok: "bg-[var(--chart-5)]/12 text-[var(--chart-5)] border-[var(--chart-5)]/30",
+  codebuddy: "bg-[var(--chart-3)]/12 text-[var(--chart-3-text)] border-[var(--chart-3)]/30",
+  "codebuddy-china": "bg-[var(--chart-5)]/12 text-[var(--chart-5-text)] border-[var(--chart-5)]/30",
+  canva: "bg-[var(--chart-6)]/12 text-[var(--chart-6-text)] border-[var(--chart-6)]/30",
+  codex: "bg-[var(--chart-1)]/12 text-[var(--chart-1-text)] border-[var(--chart-1)]/30",
+  "grok-cli": "bg-[var(--chart-2)]/12 text-[var(--chart-2-text)] border-[var(--chart-2)]/30",
+  claude: "bg-[var(--chart-4)]/12 text-[var(--chart-4-text)] border-[var(--chart-4)]/30",
+  byok: "bg-[var(--chart-5)]/12 text-[var(--chart-5-text)] border-[var(--chart-5)]/30",
 };
 
 function providerKey(owner: string): string {
@@ -111,7 +114,7 @@ export default function Models() {
 
   if (loading) {
     return (
-      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+      <p className="font-mono text-meta uppercase tracking-eyebrow text-[var(--muted-foreground)]">
         Loading models…
       </p>
     );
@@ -127,7 +130,7 @@ export default function Models() {
             <span aria-hidden className="text-[var(--border)]">·</span>
             <span>{providers.length} providers</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
-            <span className={usableModels < models.length ? "text-[var(--warning)]" : undefined}>
+            <span className={usableModels < models.length ? "text-[var(--warning-text)]" : undefined}>
               {usableModels} usable
             </span>
           </>
@@ -142,7 +145,7 @@ export default function Models() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 aria-label="Search models or owners"
-                className="h-9 w-full rounded-md border border-[var(--input)] bg-[var(--background)] pl-8 pr-2.5 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35 sm:w-56 md:h-8"
+                className="h-9 w-full rounded-md border border-[var(--input)] bg-[var(--background)] pl-8 pr-2.5 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35 sm:w-56 md:h-8"
               />
             </div>
             <button
@@ -150,7 +153,7 @@ export default function Models() {
               onClick={() => setUsableOnly((value) => !value)}
               aria-pressed={usableOnly}
               title="Only show models from providers with active, enabled accounts"
-              className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] md:h-8 ${usableOnly ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+              className={`inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 font-mono text-micro uppercase tracking-eyebrow transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] md:h-8 ${usableOnly ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary-text)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${usableOnly ? "bg-[var(--primary)]" : "bg-[var(--muted-foreground)]"}`} /> Has accounts
             </button>
@@ -165,9 +168,9 @@ export default function Models() {
           type="button"
           onClick={() => setFilter("all")}
           aria-pressed={filter === "all"}
-          className={`rounded-[4px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${filter === "all" ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+          className={`rounded-[4px] border px-2 py-1 font-mono text-micro uppercase tracking-caps transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${filter === "all" ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary-text)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
         >
-          All <span className="tabular-nums opacity-70">{models.length}</span>
+          All <span className="t-num">{models.length}</span>
         </button>
         {providers.map(([provider, count]) => {
           const active = filter === provider;
@@ -181,11 +184,11 @@ export default function Models() {
               onClick={() => setFilter(provider)}
               aria-pressed={active}
               title={accountsByProvider && !hasAccounts ? "No active accounts for this provider" : `${accountCount} active account${accountCount === 1 ? "" : "s"}`}
-              className={`rounded-[4px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${active && accent ? accent : active ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary)]" : !hasAccounts ? "border-dashed border-[var(--warning)]/35 text-[var(--muted-foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+              className={`rounded-[4px] border px-2 py-1 font-mono text-micro uppercase tracking-caps transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${active && accent ? accent : active ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-[var(--primary-text)]" : !hasAccounts ? "border-dashed border-[var(--warning)]/35 text-[var(--muted-foreground)]" : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
             >
-              {providerLabel(provider)} <span className="tabular-nums opacity-70">{count}</span>
+              {providerLabel(provider)} <span className="t-num">{count}</span>
               {accountsByProvider !== null && (
-                <span className={hasAccounts ? "text-[var(--success)]" : "text-[var(--warning)]"}>
+                <span className={hasAccounts ? "text-[var(--success-text)]" : "text-[var(--warning-text)]"}>
                   {" "}· {hasAccounts ? `${accountCount} keys` : "no keys"}
                 </span>
               )}
@@ -195,7 +198,7 @@ export default function Models() {
       </div>
 
       {accountsFailed && (
-        <p className="font-mono text-[11px] text-[var(--warning)]">
+        <p className="font-mono text-meta text-[var(--warning-text)]">
           Account availability unavailable — showing all models.
         </p>
       )}
@@ -209,13 +212,13 @@ export default function Models() {
             onClick={() => setSortBy((value) => value === "owner" ? "id" : "owner")}
             aria-label={`Sort by ${sortBy === "owner" ? "model ID" : "owner"}`}
             title={`Sort by ${sortBy === "owner" ? "model ID" : "owner"}`}
-            className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+            className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 font-mono text-micro uppercase tracking-eyebrow text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
           >
             {sortBy === "owner" ? <ArrowDownAZ className="w-3.5 h-3.5" /> : <ArrowUpAZ className="w-3.5 h-3.5" />} {sortBy === "owner" ? "Owner" : "Model ID"}
           </button>
         </div>
         <div className="max-h-[min(66vh,44rem)] overflow-auto">
-          <table className="w-full min-w-[680px] border-collapse font-mono text-[12px]">
+          <table className="w-full min-w-[680px] border-collapse font-mono text-body">
             <thead className="sticky-head">
               <tr>
                 {(["Model", "Owner", "Context", "Output", "Thinking", ""] as const).map((heading, index) => (
@@ -238,7 +241,7 @@ export default function Models() {
                   <td className="px-4 py-2">
                     <span
                       title={usableProvider(providerKey(model.owned_by)) ? undefined : "No active accounts for this provider"}
-                      className={`inline-flex max-w-[180px] items-center truncate rounded-[4px] border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em] ${usableProvider(providerKey(model.owned_by)) ? (providerColors[providerKey(model.owned_by)] || "border-[var(--border)] text-[var(--muted-foreground)]") : "border-dashed border-[var(--border)] text-[var(--muted-foreground)] opacity-70"}`}
+                      className={`inline-flex max-w-[180px] items-center truncate rounded-sm border px-1.5 py-0.5 text-micro uppercase tracking-caps ${usableProvider(providerKey(model.owned_by)) ? (providerColors[providerKey(model.owned_by)] || "border-[var(--border)] text-[var(--muted-foreground)]") : "border-dashed border-[var(--border)] text-[var(--muted-faint)]"}`}
                     >
                       {model.owned_by}
                     </span>
@@ -254,7 +257,7 @@ export default function Models() {
                       aria-label={`Copy model ID: ${model.id}`}
                       className="rounded-md p-1 transition-colors duration-150 ease-out hover:bg-[var(--secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                     >
-                      {copiedModel === model.id ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />}
+                      {copiedModel === model.id ? <Check className="w-3.5 h-3.5 text-[var(--success-text)]" /> : <Copy className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />}
                     </button>
                   </td>
                 </tr>

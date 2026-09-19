@@ -210,7 +210,7 @@ export default function Integration() {
         meta={
           clients.length > 0 ? (
             <>
-              <span className={clients.some((c) => c.detected) ? "text-[var(--success)]" : undefined}>
+              <span className={clients.some((c) => c.detected) ? "text-[var(--success-text)]" : undefined}>
                 {clients.filter((c) => c.detected).length} detected
               </span>
               <span aria-hidden className="text-[var(--border)]">·</span>
@@ -240,7 +240,7 @@ export default function Integration() {
       {message && (
         <p
           role="status"
-          className="border-l-2 border-[var(--primary)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]"
+          className="border-l-2 border-[var(--primary)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-meta text-[var(--foreground)]"
         >
           {message}
         </p>
@@ -280,7 +280,7 @@ export default function Integration() {
               <h2 className="eyebrow">the assistant Setup</h2>
             </div>
             <div className="space-y-3 px-4 py-3">
-              <p className="font-mono text-[12px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-body leading-relaxed text-[var(--muted-foreground)]">
                 Point the assistant at this proxy. Sets{" "}
                 <span className="text-[var(--foreground)]">ANTHROPIC_BASE_URL</span> and{" "}
                 <span className="text-[var(--foreground)]">ANTHROPIC_AUTH_TOKEN</span> in{" "}
@@ -303,7 +303,7 @@ export default function Integration() {
                 <ArrowRight className="h-3.5 w-3.5" /> Model Mapping
               </h2>
               <div className="flex items-center gap-3">
-                <label className="flex cursor-pointer select-none items-center gap-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+                <label className="flex cursor-pointer select-none items-center gap-2 font-mono text-meta text-[var(--muted-foreground)]">
                   <input
                     type="checkbox"
                     checked={enabled}
@@ -318,16 +318,16 @@ export default function Integration() {
               </div>
             </div>
             {loading ? (
-              <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+              <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading…</p>
             ) : (
               <div>
                 {CLAUDE_CODE_SLOTS.map((slot) => (
                   <div key={slot.source} className="flex flex-col gap-2 border-t border-[var(--hairline)] px-4 py-2.5 first:border-t-0 sm:flex-row sm:items-center">
                     <div className="shrink-0 sm:w-48">
-                      <div className="font-mono text-[12px] text-[var(--foreground)]">{slot.title}</div>
-                      <div className="font-mono text-[11px] text-[var(--muted-foreground)]">{slot.desc}</div>
+                      <div className="font-mono text-body text-[var(--foreground)]">{slot.title}</div>
+                      <div className="font-mono text-meta text-[var(--muted-foreground)]">{slot.desc}</div>
                     </div>
-                    <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]/60 sm:block" />
+                    <ArrowRight className="hidden h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] sm:block" />
                     <ModelCombobox
                       value={targets[slot.source] || ""}
                       options={models}
@@ -337,7 +337,7 @@ export default function Integration() {
                 ))}
               </div>
             )}
-            <p className="border-t border-[var(--border)] px-4 py-2.5 font-mono text-[11px] text-[var(--muted-foreground)]">
+            <p className="border-t border-[var(--border)] px-4 py-2.5 font-mono text-meta text-[var(--muted-foreground)]">
               Leave "pass through" to keep original behavior. Changes apply after Save.
             </p>
           </Card>
@@ -427,7 +427,7 @@ function CodeRow({ label, value }: { label: string; value: string }) {
         {label}
       </label>
       <div className="flex items-center gap-2 rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2">
-        <code className="flex-1 truncate font-mono text-[12px] text-[var(--foreground)]">
+        <code className="flex-1 truncate font-mono text-body text-[var(--foreground)]">
           {value}
         </code>
         <button
@@ -445,7 +445,7 @@ function CodeRow({ label, value }: { label: string; value: string }) {
           aria-label={`Copy ${label}`}
         >
           {copied ? (
-            <Check className="w-3.5 h-3.5 text-[var(--success)]" />
+            <Check className="w-3.5 h-3.5 text-[var(--success-text)]" />
           ) : (
             <Copy className="w-3.5 h-3.5" />
           )}

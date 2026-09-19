@@ -34,10 +34,12 @@ function applyTheme(theme: Theme) {
   root.classList.toggle("light", theme === "light");
   window.setTimeout(() => root.classList.remove("theme-transition"), 300);
 
-  // Update theme-color meta for mobile browser chrome
+  // Keep the mobile browser chrome in sync with the page. Read --background
+  // from the token rather than hardcoding a hex, so the two can never drift.
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
-    meta.setAttribute("content", theme === "light" ? "#f3f7f4" : "#1e1e1e");
+    const bg = getComputedStyle(root).getPropertyValue("--background").trim();
+    if (bg) meta.setAttribute("content", bg);
   }
 }
 

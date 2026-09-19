@@ -160,7 +160,7 @@ export default function Settings() {
             {dirty && (
               <>
                 <span aria-hidden className="text-[var(--border)]">·</span>
-                <span className="text-[var(--warning)]">unsaved</span>
+                <span className="text-[var(--warning-text)]">unsaved</span>
               </>
             )}
             {savedAt && !dirty && (
@@ -184,7 +184,7 @@ export default function Settings() {
       />
 
       {message && (
-        <p className="border-l-2 border-[var(--success)] bg-[var(--success)]/10 px-3 py-2 font-mono text-[11px] text-[var(--success)]">
+        <p className="border-l-2 border-[var(--success)] bg-[var(--success)]/10 px-3 py-2 font-mono text-meta text-[var(--success-text)]">
           {message}
         </p>
       )}
@@ -194,7 +194,7 @@ export default function Settings() {
         <Card className="border-[var(--border)]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-[var(--primary)]" />
+              <Zap className="w-4 h-4 text-[var(--primary-text)]" />
               Load Balancing
             </CardTitle>
             <CardDescription>
@@ -213,7 +213,7 @@ export default function Settings() {
                 <option value="sequential">Sequential failover</option>
                 <option value="round_robin">Round Robin</option>
               </Select>
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 {globalMethod === "sequential"
                   ? "Tries accounts by ID order (oldest first); on failure, continues to the next account until one succeeds or all are exhausted."
                   : "Distributes requests evenly across all active accounts. On failure, retries the next available account."}
@@ -236,18 +236,18 @@ export default function Settings() {
                         className="flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-1 py-2 first:border-t-0"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
+                          <p className="flex items-center gap-2 font-mono text-body text-[var(--foreground)]">
                             {labelFor(provider)}
                             {overriden && (
-                              <span className="rounded bg-[var(--primary)]/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--primary)]">
+                              <span className="rounded-sm bg-[var(--primary)]/15 px-1.5 py-0.5 font-mono text-micro uppercase tracking-eyebrow text-[var(--primary-text)]">
                                 override
                               </span>
                             )}
                           </p>
-                          <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                          <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                             {effective === "sequential" ? "Sequential failover" : "Round Robin"}
                             {!overriden && (
-                              <span className="ml-1 text-[var(--muted-foreground)]/70">
+                              <span className="ml-1 text-[var(--muted-foreground)]">
                                 (inherits global)
                               </span>
                             )}
@@ -257,7 +257,7 @@ export default function Settings() {
                           <Select
                             value={form[key] || ""}
                             onChange={(e) => setValue(key, e.target.value)}
-                            className="w-auto font-mono text-[11px]"
+                            className="w-auto font-mono text-meta"
                             aria-label={`Load balancing for ${labelFor(provider)}`}
                           >
                             <option value="">Inherit</option>
@@ -268,7 +268,7 @@ export default function Settings() {
                             <button
                               type="button"
                               onClick={() => setValue(key, "")}
-                              className="rounded px-2 py-1 font-mono text-[11px] text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+                              className="rounded px-2 py-1 font-mono text-meta text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                               title="Clear override"
                             >
                               Reset
@@ -288,7 +288,7 @@ export default function Settings() {
         <Card className="border-[var(--border)]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Flame className="w-4 h-4 text-[var(--primary)]" />
+              <Flame className="w-4 h-4 text-[var(--primary-text)]" />
               Auto WarmUp
             </CardTitle>
             <CardDescription>
@@ -307,36 +307,36 @@ export default function Settings() {
                 placeholder="15"
                 className="mt-1.5 font-mono tabular-nums"
               />
-              <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="mt-1 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Global interval for all providers with Auto WarmUp enabled
               </p>
             </div>
 
             <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
               <p className="eyebrow">Status</p>
-              <p className="font-mono text-[12px] text-[var(--foreground)]">
+              <p className="font-mono text-body text-[var(--foreground)]">
                 {warmupStatus && warmupStatus.enabledProviders.length > 0
                   ? `${warmupStatus.enabledProviders.length} provider${warmupStatus.enabledProviders.length === 1 ? "" : "s"} enabled`
                   : "No provider enabled"}
               </p>
               {warmupStatus?.enabledProviders && warmupStatus.enabledProviders.length > 0 && (
-                <p className="truncate font-mono text-[11px] text-[var(--muted-foreground)]">
+                <p className="truncate font-mono text-meta text-[var(--muted-foreground)]">
                   {warmupStatus.enabledProviders.map(labelFor).join(", ")}
                 </p>
               )}
               {warmupStatus?.nextRunAt && (
-                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                   Next run: {new Date(warmupStatus.nextRunAt).toLocaleTimeString()}
                 </p>
               )}
               {savedAt && (
-                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                   Last saved: {savedAt.toLocaleTimeString()}
                 </p>
               )}
             </div>
 
-            <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
               Auto WarmUp checks accounts with status active, exhausted, or error (skips pending). Enable/disable per provider on the Accounts page.
             </p>
           </CardContent>
@@ -346,7 +346,7 @@ export default function Settings() {
         <Card className="border-[var(--border)]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Globe className="w-4 h-4 text-[var(--primary)]" />
+              <Globe className="w-4 h-4 text-[var(--primary-text)]" />
               Proxy Pool
             </CardTitle>
             <CardDescription>
@@ -366,7 +366,7 @@ export default function Settings() {
                 <option value="model">Model Only — API requests only</option>
                 <option value="auth">Auth Only — Login automation only</option>
               </Select>
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 {form.proxy_pool_usage === "model"
                   ? "Proxies are only used for upstream model API calls. Auth/login runs without proxy."
                   : form.proxy_pool_usage === "auth"
@@ -386,7 +386,7 @@ export default function Settings() {
                 <option value="round_robin">Round Robin</option>
                 <option value="sequential">Sequential</option>
               </Select>
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 {form.proxy_pool_rotation === "sequential"
                   ? "Uses one proxy until it fails, then moves to the next in the list."
                   : "Distributes requests evenly across all active proxies in rotation."}
@@ -401,7 +401,7 @@ export default function Settings() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <CardTitle className="flex items-center gap-2">
-                  <Wand2 className="w-4 h-4 text-[var(--primary)]" />
+                  <Wand2 className="w-4 h-4 text-[var(--primary-text)]" />
                   Compression
                 </CardTitle>
                 <CardDescription>
@@ -412,7 +412,7 @@ export default function Settings() {
                 href="https://github.com/priyo000/etteum-pool/blob/main/docs/compression.md"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-0.5 shrink-0 font-mono text-[11px] text-[var(--primary)] hover:underline"
+                className="mt-0.5 shrink-0 font-mono text-meta text-[var(--primary-text)] hover:underline"
                 title="Open the compression docs"
               >
                 docs ↗
@@ -450,14 +450,14 @@ export default function Settings() {
                           setValue("compression_rtk_max_tool_chars", preset.chars);
                           setValue("compression_rtk_keep_last_n_turns_full", preset.turns);
                         }}
-                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-meta transition-colors duration-150 ${
                           selected
-                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary-text)]"
                             : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                         }`}
                       >
                         <div>{preset.name}</div>
-                        <div className="text-[10px] mt-0.5 opacity-70">
+                        <div className="text-micro mt-0.5">
                           {preset.chars} chars · keep {preset.turns}
                         </div>
                       </button>
@@ -479,7 +479,7 @@ export default function Settings() {
                         onChange={(e) => setValue("compression_rtk_max_tool_chars", e.target.value)}
                         className="mt-1.5 font-mono tabular-nums"
                       />
-                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                      <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                         ~4 chars = 1 token. Default: <code>4000</code> (≈1000 tokens).
                       </p>
                     </div>
@@ -493,7 +493,7 @@ export default function Settings() {
                         onChange={(e) => setValue("compression_rtk_keep_last_n_turns_full", e.target.value)}
                         className="mt-1.5 font-mono tabular-nums"
                       />
-                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                      <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                         Recent turns left untouched. Default: <code>2</code>.
                       </p>
                     </div>
@@ -505,9 +505,9 @@ export default function Settings() {
                           checked={form.compression_rtk_smart_truncate === "true"}
                           onChange={(e) => setValue("compression_rtk_smart_truncate", e.target.checked ? "true" : "false")}
                         />
-                        <span className="font-mono text-[11px] text-[var(--foreground)]">Pattern-aware</span>
+                        <span className="font-mono text-meta text-[var(--foreground)]">Pattern-aware</span>
                       </label>
-                      <p className="mt-1 font-mono text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+                      <p className="mt-1 font-mono text-micro leading-relaxed text-[var(--muted-foreground)]">
                         git diff / tree aware. Default: <code>on</code>.
                       </p>
                     </div>
@@ -535,7 +535,7 @@ export default function Settings() {
               alwaysShowChildren
             >
               <div className="mt-3 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                <div className="text-meta uppercase tracking-wide text-[var(--muted-foreground)]">
                   Compression level
                 </div>
                 <div className="grid grid-cols-3 gap-2">
@@ -553,19 +553,19 @@ export default function Settings() {
                         type="button"
                         onClick={() => setValue("compression_caveman_level", lvl)}
                         title={hint}
-                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-meta transition-colors duration-150 ${
                           selected
-                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary-text)]"
                             : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                         }`}
                       >
                         <div>{title}</div>
-                        <div className="text-[10px] mt-0.5 opacity-70">{subtitle}</div>
+                        <div className="text-micro mt-0.5">{subtitle}</div>
                       </button>
                     );
                   })}
                 </div>
-                <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
+                <p className="text-meta text-[var(--muted-foreground)] leading-relaxed">
                   {form.compression_caveman_level === "lite" &&
                     "Lite: removes politeness fillers (\"please\", \"make sure to\") and verbose connectors. Sentence structure preserved. Saves ~5–15%."}
                   {form.compression_caveman_level === "full" &&
@@ -586,7 +586,7 @@ export default function Settings() {
               alwaysShowChildren
             >
               <div className="mt-3 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                <div className="text-meta uppercase tracking-wide text-[var(--muted-foreground)]">
                   Ruleset intensity
                 </div>
                 <div className="grid grid-cols-3 gap-2">
@@ -604,19 +604,19 @@ export default function Settings() {
                         type="button"
                         onClick={() => setValue("compression_ponytail_mode", lvl)}
                         title={hint}
-                        className={`rounded-md border px-3 py-2 text-left font-mono text-[11px] transition-colors duration-150 ${
+                        className={`rounded-md border px-3 py-2 text-left font-mono text-meta transition-colors duration-150 ${
                           selected
-                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
+                            ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary-text)]"
                             : "border-[var(--border)] bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                         }`}
                       >
                         <div>{title}</div>
-                        <div className="text-[10px] mt-0.5 opacity-70">{subtitle}</div>
+                        <div className="text-micro mt-0.5">{subtitle}</div>
                       </button>
                     );
                   })}
                 </div>
-                <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
+                <p className="text-meta text-[var(--muted-foreground)] leading-relaxed">
                   {form.compression_ponytail_mode === "lite" &&
                     "Lite: the 7-rung YAGNI ladder (does this need to be built? reuse existing? stdlib? one line?) plus 5 core rules (no abstractions, deletion over addition, shortest diff, fewest files, question complex requests). ~300 tokens added."}
                   {form.compression_ponytail_mode === "full" &&
@@ -626,7 +626,7 @@ export default function Settings() {
                 </p>
                 <Disclosure label="Advanced settings">
                   <div className="space-y-3">
-                    <label className="flex cursor-pointer items-center gap-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+                    <label className="flex cursor-pointer items-center gap-2 font-mono text-meta text-[var(--muted-foreground)]">
                       <input
                         type="checkbox"
                         checked={form.compression_ponytail_strip_markers === "true"}
@@ -635,7 +635,7 @@ export default function Settings() {
                       />
                       <span>Strip <code>ponytail:</code> markers from response before storing (markers still counted in stats)</span>
                     </label>
-                    <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+                    <p className="text-micro text-[var(--muted-foreground)] leading-relaxed">
                       When enabled, <code>ponytail: ceiling, upgrade</code> comments are removed from the
                       response body stored in <code>request_logs</code>. The marker count and details are
                       still recorded in <code>compression_stats.ponytail</code> for telemetry. Disable to
@@ -679,7 +679,7 @@ export default function Settings() {
         <Card className="border-[var(--border)] lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Bell className="w-4 h-4 text-[var(--primary)]" />
+              <Bell className="w-4 h-4 text-[var(--primary-text)]" />
               Alerts
             </CardTitle>
             <CardDescription>
@@ -703,7 +703,7 @@ export default function Settings() {
                 value={form.alert_webhook_url || ""}
                 onChange={(e) => setValue("alert_webhook_url", e.target.value)}
               />
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Discord or Slack compatible — receives <code>{"{content}"}</code> JSON POST
               </p>
             </div>
@@ -724,7 +724,7 @@ export default function Settings() {
                   onChange={(e) => setValue("alert_telegram_chat", e.target.value)}
                 />
               </div>
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Optional — sends via Telegram sendMessage API
               </p>
             </div>
@@ -828,7 +828,7 @@ export default function Settings() {
 function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <details className="group rounded-md border border-[var(--hairline)]">
-      <summary className="flex cursor-pointer list-none select-none items-center justify-between px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+      <summary className="flex cursor-pointer list-none select-none items-center justify-between px-3 py-2 font-mono text-micro uppercase tracking-eyebrow text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
         <span>{label}</span>
         <span className="transition-transform group-open:rotate-180" aria-hidden>▾</span>
       </summary>
@@ -860,10 +860,10 @@ function CompressionRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <span className="font-mono text-[12px] font-semibold uppercase tracking-[0.08em] text-[var(--foreground)]">{title}</span>
-            <span className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">({subtitle})</span>
+            <span className="font-mono text-body font-semibold uppercase tracking-caps text-[var(--foreground)]">{title}</span>
+            <span className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">({subtitle})</span>
           </div>
-          <p className="mt-1 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">{description}</p>
+          <p className="mt-1 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">{description}</p>
         </div>
         <label className="relative inline-flex items-center cursor-pointer shrink-0">
           <input

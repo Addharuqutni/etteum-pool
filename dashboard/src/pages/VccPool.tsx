@@ -246,7 +246,7 @@ export default function VccPool() {
         title="VCC Pool"
         meta={
           <>
-            <span className={pool.count > 0 ? "text-[var(--success)]" : undefined}>
+            <span className={pool.count > 0 ? "text-[var(--success-text)]" : undefined}>
               {pool.count} active {pool.count === 1 ? "card" : "cards"}
             </span>
             <span aria-hidden className="text-[var(--border)]">·</span>
@@ -259,15 +259,18 @@ export default function VccPool() {
       {pool.count > 0 && (
         <Card className="grid grid-cols-2 divide-x divide-y divide-[var(--border)] sm:grid-cols-5 sm:divide-y-0">
           <Stat label="Total" value={stats.total} />
-          <Stat label="Visa" value={stats.visa} tone="var(--chart-1)" />
-          <Stat label="Mastercard" value={stats.mastercard} tone="var(--chart-2)" />
-          <Stat label="Amex" value={stats.amex} tone="var(--chart-3)" />
+          {/* tone is TEXT on a card, so these use the -text variants — the
+              plain fills are for chart strokes and are unreadable as type in
+              light mode. */}
+          <Stat label="Visa" value={stats.visa} tone="var(--chart-1-text)" />
+          <Stat label="Mastercard" value={stats.mastercard} tone="var(--chart-2-text)" />
+          <Stat label="Amex" value={stats.amex} tone="var(--chart-3-text)" />
           <Stat label="Other" value={stats.other} />
         </Card>
       )}
 
       {message && (
-        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-meta text-[var(--foreground)]">
           {message}
         </p>
       )}
@@ -336,7 +339,7 @@ export default function VccPool() {
                   brand={detectBrand(selectedBin)}
                 />
                 {binInfo && (
-                  <dl className="mt-4 divide-y divide-[var(--hairline)] border-t border-[var(--hairline)] font-mono text-[12px]">
+                  <dl className="mt-4 divide-y divide-[var(--hairline)] border-t border-[var(--hairline)] font-mono text-body">
                     {[
                       ["Brand", binInfo.brand, true],
                       ["Country", binInfo.countryName, false],
@@ -359,7 +362,7 @@ export default function VccPool() {
         <TabsContent value="generated">
           <Card>
             <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-              <h2 className="eyebrow">Generated Cards <span className="tabular-nums opacity-70">{generatedCards.length}</span></h2>
+              <h2 className="eyebrow">Generated Cards <span className="t-num">{generatedCards.length}</span></h2>
               {generatedCards.length > 0 && (
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={handleCopyAll}>
@@ -376,8 +379,8 @@ export default function VccPool() {
             <div className="px-4 py-3">
               {generatedCards.length === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-1.5 py-12 text-center">
-                  <CreditCard className="h-6 w-6 text-[var(--muted-foreground)]/40" />
-                  <p className="font-mono text-[12px] text-[var(--muted-foreground)]">
+                  <CreditCard className="h-6 w-6 text-[var(--muted-foreground)]" />
+                  <p className="font-mono text-body text-[var(--muted-foreground)]">
                     No cards generated yet — use the Generator tab.
                   </p>
                 </div>
@@ -393,7 +396,7 @@ export default function VccPool() {
                         showActions
                         onCopy={() => handleCopyCard(card)}
                       />
-                      <div className="px-1 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                      <div className="px-1 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                         <div>{formatCardNumber(card.number)}</div>
                         <div className="mt-1 flex justify-between">
                           <span>Exp: {formatExpiry(card.expMonth, card.expYear)}</span>
@@ -421,7 +424,7 @@ export default function VccPool() {
                 value={bulkText}
                 onChange={(e) => setBulkText(e.target.value)}
                 placeholder={"number|mm/yy|cvv\n4111111111111111|12/30|123\n\nor: number|mm|yy|cvv\n4111111111111111|12|30|123"}
-                className="h-[120px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                className="h-[120px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
               />
               <Button onClick={handleBulkImport} className="w-full">
                 <Upload className="w-3.5 h-3.5" />
@@ -435,7 +438,7 @@ export default function VccPool() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
               <h2 className="eyebrow flex items-center gap-1.5">
                 <CreditCard className="h-3.5 w-3.5" />
-                Active Cards <span className="tabular-nums opacity-70">{pool.count}</span>
+                Active Cards <span className="t-num">{pool.count}</span>
               </h2>
               {pool.count > 0 && (
                 <div className="flex flex-wrap gap-2">
@@ -443,7 +446,7 @@ export default function VccPool() {
                     <Download className="w-3 h-3" />
                     Export
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleClearAll} className="text-[var(--error)] hover:text-[var(--destructive)]">
+                  <Button variant="outline" size="sm" onClick={handleClearAll} className="text-[var(--error-text)] hover:text-[var(--destructive-text)]">
                     <Trash2 className="w-3 h-3" />
                     Clear All
                   </Button>
@@ -451,9 +454,9 @@ export default function VccPool() {
               )}
             </div>
             {loading ? (
-              <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+              <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading…</p>
             ) : pool.cards.length === 0 ? (
-              <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+              <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">
                 No active cards. Generate or import above.
               </p>
             ) : (
@@ -461,7 +464,7 @@ export default function VccPool() {
                 {pool.cards.map((card) => (
                   <div
                     key={card.id}
-                    className="flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-4 py-2 font-mono text-[12px] transition-colors duration-150 first:border-t-0 hover:bg-[var(--secondary)]/50"
+                    className="flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-4 py-2 font-mono text-body transition-colors duration-150 first:border-t-0 hover:bg-[var(--secondary)]/50"
                   >
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                       <span className="tabular-nums text-[var(--foreground)]">•••• {card.last4}</span>
@@ -473,9 +476,9 @@ export default function VccPool() {
                       size="icon"
                       onClick={() => handleDelete(card.id)}
                       title="Remove card"
-                      className="shrink-0 hover:text-[var(--destructive)]"
+                      className="shrink-0 hover:text-[var(--destructive-text)]"
                     >
-                      <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                      <Trash2 className="w-3.5 h-3.5 text-[var(--error-text)]" />
                     </Button>
                   </div>
                 ))}
@@ -489,16 +492,16 @@ export default function VccPool() {
           <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
             <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-4 py-3">
               <CheckCircle className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-              <h2 className="eyebrow">Upgrade History <span className="tabular-nums opacity-70">{transactions.length}</span></h2>
+              <h2 className="eyebrow">Upgrade History <span className="t-num">{transactions.length}</span></h2>
             </div>
             {transactions.length === 0 ? (
-              <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">No upgrade transactions yet.</p>
+              <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">No upgrade transactions yet.</p>
             ) : (
               <div>
                 {transactions.map((tx) => (
                   <div
                     key={tx.id}
-                    className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 border-t border-[var(--hairline)] px-4 py-2 font-mono text-[12px] transition-colors duration-150 first:border-t-0 hover:bg-[var(--secondary)]/50"
+                    className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 border-t border-[var(--hairline)] px-4 py-2 font-mono text-body transition-colors duration-150 first:border-t-0 hover:bg-[var(--secondary)]/50"
                   >
                     <div className="flex min-w-0 items-center gap-3">
                       <span
@@ -511,7 +514,7 @@ export default function VccPool() {
                       </span>
                       <Badge variant={tx.status === "success" ? "success" : "destructive"}>{tx.status}</Badge>
                     </div>
-                    <span className="tabular-nums text-[11px] text-[var(--muted-foreground)]">
+                    <span className="tabular-nums text-meta text-[var(--muted-foreground)]">
                       {new Date(tx.createdAt).toLocaleString()}
                     </span>
                   </div>
@@ -538,7 +541,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
     <div className="px-3 py-3">
       <div className="eyebrow">{label}</div>
       <div
-        className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
+        className="mt-1.5 font-mono text-stat-sm font-semibold tabular-nums"
         style={{ color: tone || "var(--foreground)" }}
       >
         {value}

@@ -24,9 +24,10 @@ const CodexOAuthCallback = lazy(() => import("./pages/CodexOAuthCallback"));
 const AntigravityOAuthCallback = lazy(() => import("./pages/AntigravityOAuthCallback"));
 const Share = lazy(() => import("./pages/Share"));
 const Pool = lazy(() => import("./pages/Pool"));
+const ModelStudio = lazy(() => import("./pages/ModelStudio"));
 
 function RouteFallback() {
-  return <div className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
+  return <div className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading...</div>;
 }
 
 export default function App() {
@@ -60,7 +61,7 @@ export default function App() {
   }
 
   if (authed === null) {
-    return <div className="flex h-screen items-center justify-center font-mono text-[12px] text-[var(--muted-foreground)]">Loading...</div>;
+    return <div className="flex h-dvh items-center justify-center font-mono text-body text-[var(--muted-foreground)]">Loading...</div>;
   }
 
   return (
@@ -90,6 +91,7 @@ export default function App() {
             <Route path="/filter-rules" element={<FilterRules />} />
             <Route path="/integration" element={<Integration />} />
             <Route path="/image-studio" element={<ImageStudio />} />
+            <Route path="/model-studio" element={<ModelStudio />} />
             <Route path="/oauth/codex/callback" element={<CodexOAuthCallback />} />
             <Route path="/oauth/antigravity/callback" element={<AntigravityOAuthCallback />} />
           </Route>

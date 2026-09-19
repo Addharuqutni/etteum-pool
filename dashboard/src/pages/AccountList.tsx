@@ -113,7 +113,7 @@ function CodexQuotaCell({ codex, fallbackRemaining, fallbackLimit }: { codex?: C
     const tone = remaining <= 10 ? "bg-[var(--error)]" : remaining <= 40 ? "bg-[var(--warning)]" : "bg-[var(--success)]";
     return (
       <div className="space-y-0.5">
-        <div className="flex items-center justify-between text-[10px] text-[var(--muted-foreground)]">
+        <div className="flex items-center justify-between text-micro text-[var(--muted-foreground)]">
           <span className="font-medium">{label} ({formatWindow(w.limit_window_seconds)})</span>
           <span>{remaining.toFixed(1)}% left · reset {formatResetIn(w.reset_after_seconds)}</span>
         </div>
@@ -125,7 +125,7 @@ function CodexQuotaCell({ codex, fallbackRemaining, fallbackLimit }: { codex?: C
   };
   return (
     <div className="space-y-1.5 min-w-[200px]">
-      {codex.plan_type && <div className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">Plan: {codex.plan_type}{codex.rate_limited && <span className="ml-2 text-[var(--error)]">RATE LIMITED</span>}</div>}
+      {codex.plan_type && <div className="text-micro uppercase tracking-wide text-[var(--muted-foreground)]">Plan: {codex.plan_type}{codex.rate_limited && <span className="ml-2 text-[var(--error-text)]">RATE LIMITED</span>}</div>}
       {renderBar("Session", codex.primary)}
       {renderBar("Weekly", codex.secondary)}
     </div>
@@ -361,11 +361,11 @@ export default function AccountList() {
           <>
             <span>{accounts.length} accounts</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
-            <span className={enabledCount > 0 ? "text-[var(--success)]" : undefined}>{enabledCount} enabled</span>
+            <span className={enabledCount > 0 ? "text-[var(--success-text)]" : undefined}>{enabledCount} enabled</span>
             {errorCount > 0 && (
               <>
                 <span aria-hidden className="text-[var(--border)]">·</span>
-                <span className="text-[var(--error)]">{errorCount} error</span>
+                <span className="text-[var(--error-text)]">{errorCount} error</span>
               </>
             )}
           </>
@@ -385,17 +385,17 @@ export default function AccountList() {
               <RotateCcw className="w-3.5 h-3.5" /> Retry errors ({errorCount})
             </Button>
             <Button variant="ghost" size="sm" onClick={() => handleToggleAll(true)} disabled={disabledCount === 0}>
-              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" /> Enable ({disabledCount})
+              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success-text)]" /> Enable ({disabledCount})
             </Button>
             <Button variant="ghost" size="sm" onClick={() => handleToggleAll(false)} disabled={enabledCount === 0}>
-              <XCircle className="w-3.5 h-3.5 text-[var(--error)]" /> Disable ({enabledCount})
+              <XCircle className="w-3.5 h-3.5 text-[var(--error-text)]" /> Disable ({enabledCount})
             </Button>
           </>
         }
       />
 
       {(message || error) && (
-        <p className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}>
+        <p className={`border-l-2 px-3 py-2 font-mono text-meta ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success-text)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error-text)]"}`}>
           {message || error}
         </p>
       )}
@@ -426,7 +426,7 @@ export default function AccountList() {
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
         <div className="flex flex-col gap-2 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/[0.06] p-3 sm:flex-row sm:items-center sm:justify-between">
-          <span className="text-sm text-[var(--foreground)]">
+          <span className="text-body text-[var(--foreground)]">
             {selectedIds.size} selected
           </span>
           <div className="flex gap-2">
@@ -436,7 +436,7 @@ export default function AccountList() {
             <Button
               variant="outline"
               size="sm"
-              className="border-[var(--error)]/40 text-[var(--error)] hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
+              className="border-[var(--error)]/40 text-[var(--error-text)] hover:bg-[var(--error)]/10 hover:text-[var(--error-text)]"
               onClick={handleBulkDelete}
               disabled={bulkDeleting}
             >
@@ -449,7 +449,7 @@ export default function AccountList() {
       {/* Primary surface: the account table */}
       <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse font-mono text-[12px]">
+          <table className="w-full border-collapse font-mono text-body">
             <thead className="sticky-head">
               <tr>
                 <th className="w-10 px-4 py-2">
@@ -496,7 +496,7 @@ export default function AccountList() {
                   </td>
                   <td className="px-4 py-2 text-[var(--foreground)]">
                     <div>{account.email}</div>
-                    {account.errorMessage && <div className="mt-1 line-clamp-1 text-[11px] text-[var(--error)]" title={account.errorMessage}>{account.errorMessage}</div>}
+                    {account.errorMessage && <div className="mt-1 line-clamp-1 text-meta text-[var(--error-text)]" title={account.errorMessage}>{account.errorMessage}</div>}
                   </td>
                   <td className="px-4 py-2"><Badge variant={statusVariants[account.status]}>{account.status}</Badge></td>
                   <td className="px-4 py-2">
@@ -517,23 +517,23 @@ export default function AccountList() {
                       : <span className="flex items-center gap-1.5">
                           {formatCredit(account.quotaRemaining)}/{formatCredit(account.quotaLimit)}
                           {account.metadata?.overage?.enabled && account.metadata.overage.remaining > 0 && (
-                            <Badge variant="success" className="text-[10px] px-1 py-0">
+                            <Badge variant="success" className="text-micro px-1 py-0">
                               PAYG: {Math.round(account.metadata.overage.used)}
                             </Badge>
                           )}
                         </span>}
                   </td>
-                  <td className="hidden px-4 py-2 text-[11px] tabular-nums text-[var(--muted-foreground)] md:table-cell">{formatDate(account.lastLoginAt || account.lastUsedAt)}</td>
+                  <td className="hidden px-4 py-2 text-meta tabular-nums text-[var(--muted-foreground)] md:table-cell">{formatDate(account.lastLoginAt || account.lastUsedAt)}</td>
                   <td className="px-4 py-2">
                     <div className="flex gap-1">
                       <Button variant="ghost" size="icon" onClick={() => handleWarmup(account.id)} title="WarmUp">
-                        <RefreshCw className="w-3.5 h-3.5 text-[var(--warning)]" />
+                        <RefreshCw className="w-3.5 h-3.5 text-[var(--warning-text)]" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleLogin(account.id)} title="Queue login" disabled={account.status !== "pending" && account.status !== "error"}>
                         <RotateCcw className="w-3.5 h-3.5" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleDelete(account.id)} title="Delete" className="hover:text-[var(--destructive)]">
-                        <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                      <Button variant="ghost" size="icon" onClick={() => handleDelete(account.id)} title="Delete" className="hover:text-[var(--destructive-text)]">
+                        <Trash2 className="w-3.5 h-3.5 text-[var(--error-text)]" />
                       </Button>
                     </div>
                   </td>
@@ -545,8 +545,8 @@ export default function AccountList() {
                   <td colSpan={7} className="px-4 py-12">
                     <div className="flex flex-col items-center justify-center gap-1.5 text-center text-[var(--muted-foreground)]">
                       <Search className="h-6 w-6 opacity-40" />
-                      <p className="font-mono text-[12px]">No accounts found</p>
-                      <p className="font-mono text-[11px] opacity-80">Try adjusting your search or status filter.</p>
+                      <p className="font-mono text-body">No accounts found</p>
+                      <p className="font-mono text-meta">Try adjusting your search or status filter.</p>
                     </div>
                   </td>
                 </tr>
@@ -556,12 +556,12 @@ export default function AccountList() {
         </div>
         {filtered.length > perPage && (
           <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
-            <p className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+            <p className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
               {(page - 1) * perPage + 1}–{Math.min(page * perPage, filtered.length)} of {filtered.length}
             </p>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(filtered.length / perPage)}</span>
+              <span className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(filtered.length / perPage)}</span>
               <Button variant="outline" size="sm" disabled={page >= Math.ceil(filtered.length / perPage)} onClick={() => setPage(page + 1)}>Next</Button>
             </div>
           </div>

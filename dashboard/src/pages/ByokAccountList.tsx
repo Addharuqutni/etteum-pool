@@ -325,7 +325,7 @@ export default function ByokAccountList() {
   if (loading && !provider) {
     return (
       <div>
-        <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading BYOK provider...</p>
+        <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading BYOK provider...</p>
       </div>
     );
   }
@@ -344,7 +344,7 @@ export default function ByokAccountList() {
           <>
             <span>{form.keys.length} keys</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
-            <span className={activeKeyCount > 0 ? "text-[var(--success)]" : undefined}>{activeKeyCount} enabled</span>
+            <span className={activeKeyCount > 0 ? "text-[var(--success-text)]" : undefined}>{activeKeyCount} enabled</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
             <span>{models.length} models</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
@@ -372,7 +372,7 @@ export default function ByokAccountList() {
       {(message || error) && (
         <p
           role="status"
-          className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}
+          className={`border-l-2 px-3 py-2 font-mono text-meta ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success-text)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error-text)]"}`}
         >
           {message || error}
         </p>
@@ -408,7 +408,7 @@ export default function ByokAccountList() {
                 <option value="round_robin">Round Robin</option>
                 <option value="sequential">Sequential</option>
               </Select>
-              <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Round Robin rotates keys. Sequential prioritizes the first healthy key in table order.</p>
+              <p className="mt-1.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">Round Robin rotates keys. Sequential prioritizes the first healthy key in table order.</p>
             </div>
           </div>
           <div>
@@ -419,11 +419,11 @@ export default function ByokAccountList() {
                   {fetchingModels ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                   {fetchingModels ? "Fetching..." : "Fetch Models"}
                 </Button>
-                <p className="font-mono text-[10px] text-[var(--muted-foreground)]/70">⚡ to test</p>
+                <p className="font-mono text-micro text-[var(--muted-foreground)]">⚡ to test</p>
               </div>
             </div>
-            <textarea value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} className="h-24 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35" placeholder="gpt-4o, claude-sonnet, llama-3" />
-            <p className="mt-1.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Comma-separated model IDs. Public model IDs become <span className="text-[var(--foreground)]">{prefix || "prefix"}-model</span>.</p>
+            <textarea value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} className="h-24 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35" placeholder="gpt-4o, claude-sonnet, llama-3" />
+            <p className="mt-1.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">Comma-separated model IDs. Public model IDs become <span className="text-[var(--foreground)]">{prefix || "prefix"}-model</span>.</p>
             {modelChips.length > 0 && (
               <div className="flex flex-wrap gap-1 pt-2">
                 {modelChips.map((model) => {
@@ -434,18 +434,18 @@ export default function ByokAccountList() {
                       key={model}
                       className={`inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 font-mono text-xs ${
                         mt?.state === "error"
-                          ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error)]"
+                          ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error-text)]"
                           : mt?.state === "ok"
-                            ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]"
+                            ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success-text)]"
                             : configured
-                              ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary)]/80"
+                              ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary-text)]"
                               : "border-dashed border-[var(--border)] bg-transparent text-[var(--muted-foreground)]"
                       }`}
                       title={mt?.error || (configured ? model : `${model} (discovered, not in routing list)`)}
                     >
                       <span className="truncate">{model}</span>
                       {mt?.state === "ok" && mt.latency != null && (
-                        <span className="shrink-0 tabular-nums opacity-80">{mt.latency}ms</span>
+                        <span className="t-num shrink-0">{mt.latency}ms</span>
                       )}
                       <button
                         type="button"
@@ -479,7 +479,7 @@ export default function ByokAccountList() {
           </Button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse font-mono text-[12px]">
+          <table className="w-full border-collapse font-mono text-body">
             <thead className="sticky-head">
               <tr>
                 <th className="eyebrow px-4 py-2 text-left">Key Label</th>
@@ -498,7 +498,7 @@ export default function ByokAccountList() {
                 <tr key={`${key.id || "new"}-${index}`} className="border-t border-[var(--hairline)] hover:bg-[var(--secondary)]/50 transition-colors duration-150">
                   <td className="px-4 py-2">
                     <Input value={key.label} onChange={(e) => updateKey(index, { label: e.target.value })} className="h-8 min-w-[140px] font-mono text-xs" />
-                    {form.load_balancing_method === "sequential" && <div className="mt-1 text-[10px] text-[var(--muted-foreground)]">Priority #{index + 1}</div>}
+                    {form.load_balancing_method === "sequential" && <div className="mt-1 text-micro text-[var(--muted-foreground)]">Priority #{index + 1}</div>}
                   </td>
                   <td className="px-4 py-2">
                     <div className="flex min-w-[260px] items-center gap-1">
@@ -525,10 +525,10 @@ export default function ByokAccountList() {
                   </td>
                   <td className="px-4 py-2">
                     <Badge variant={key.status === "error" ? "error" : key.status === "active" ? "success" : "secondary"}>{key.status || (key.id ? "active" : "new")}</Badge>
-                    {key.errorMessage && <div className="mt-1 max-w-[220px] truncate text-[11px] text-[var(--error)]" title={key.errorMessage}>{key.errorMessage}</div>}
+                    {key.errorMessage && <div className="mt-1 max-w-[220px] truncate text-meta text-[var(--error-text)]" title={key.errorMessage}>{key.errorMessage}</div>}
                     {key.id && testResults[key.id] && (
                       <div
-                        className={`mt-1 font-mono text-[10px] tabular-nums ${testResults[key.id].ok ? "text-[var(--success)]" : "text-[var(--error)]"}`}
+                        className={`mt-1 font-mono text-micro tabular-nums ${testResults[key.id].ok ? "text-[var(--success-text)]" : "text-[var(--error-text)]"}`}
                         title={testResults[key.id].error || "Last test result"}
                       >
                         {testResults[key.id].ok
@@ -549,14 +549,14 @@ export default function ByokAccountList() {
                       <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${key.enabled ? "translate-x-4" : "translate-x-0.5"}`} />
                     </button>
                   </td>
-                  <td className="px-4 py-2 text-[11px] tabular-nums text-[var(--muted-foreground)]">{formatDate((provider?.keys || []).find((k: ByokKeyInfo) => k.id === key.id)?.lastUsedAt)}</td>
+                  <td className="px-4 py-2 text-meta tabular-nums text-[var(--muted-foreground)]">{formatDate((provider?.keys || []).find((k: ByokKeyInfo) => k.id === key.id)?.lastUsedAt)}</td>
                   <td className="px-4 py-2">
                     <div className="flex gap-1">
                       <Button variant="ghost" size="icon" onClick={() => testKey(key)} disabled={testingKey === key.id || !key.id} title="Test key">
-                        {testingKey === key.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-[var(--info)]" /> : <Zap className="w-3.5 h-3.5 text-[var(--info)]" />}
+                        {testingKey === key.id ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-[var(--info-text)]" /> : <Zap className="w-3.5 h-3.5 text-[var(--info-text)]" />}
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => removeKey(index)} title="Delete key" className="hover:text-[var(--destructive)]">
-                        <Trash2 className="w-3.5 h-3.5 text-[var(--error)]" />
+                      <Button variant="ghost" size="icon" onClick={() => removeKey(index)} title="Delete key" className="hover:text-[var(--destructive-text)]">
+                        <Trash2 className="w-3.5 h-3.5 text-[var(--error-text)]" />
                       </Button>
                     </div>
                   </td>

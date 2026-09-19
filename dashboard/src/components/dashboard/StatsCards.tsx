@@ -66,13 +66,16 @@ export default function StatsCards({ data = defaultData }: StatsCardsProps) {
         <div>
           <div className="eyebrow">Error rate</div>
           <div
-            className="mt-1.5 font-mono text-[40px] font-semibold leading-none tabular-nums"
+            className="mt-1.5 font-mono text-hero font-semibold tabular-nums"
             style={{ color: errorTone }}
           >
             {errorRate}
-            <span className="ml-0.5 text-[18px] font-medium opacity-60">%</span>
+            {/* The "%" is emphasis-deferring chrome, not data. Opacity on text
+                breaks contrast in light mode (2.5:1), so it uses the muted
+                token instead — dimmer-looking, still compliant. */}
+            <span className="ml-0.5 text-display font-medium text-[var(--muted-foreground)]">%</span>
           </div>
-          <div className="mt-2 font-mono text-[11px] text-[var(--muted-foreground)]">
+          <div className="mt-2 font-mono text-meta text-[var(--muted-foreground)]">
             {data.successRate}% success · {data.requests.toLocaleString()} req
           </div>
         </div>
@@ -91,7 +94,7 @@ export default function StatsCards({ data = defaultData }: StatsCardsProps) {
               </>
             ) : null}
           </div>
-          <div className="mt-1.5 text-right font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+          <div className="mt-1.5 text-right font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
             {data.accounts.active}/{data.accounts.total}
           </div>
         </div>
@@ -103,12 +106,12 @@ export default function StatsCards({ data = defaultData }: StatsCardsProps) {
           <div key={stat.label} className="px-3 py-4 sm:px-4">
             <div className="eyebrow">{stat.label}</div>
             <div
-              className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
+              className="mt-1.5 font-mono text-stat-sm font-semibold tabular-nums"
               style={{ color: stat.tone || "var(--foreground)" }}
             >
               {stat.value}
             </div>
-            <div className="mt-1.5 truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+            <div className="mt-1.5 truncate font-mono text-micro text-[var(--muted-foreground)]">
               {stat.note}
             </div>
           </div>

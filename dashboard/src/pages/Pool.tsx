@@ -122,7 +122,7 @@ export default function Pool() {
     <div className="mx-auto max-w-6xl space-y-4 px-4 py-6">
       <div className="rise">
         <p className="eyebrow">etteum pool</p>
-        <h1 className="mt-1 text-xl font-semibold tracking-tight">Shared models, ready to use.</h1>
+        <h1 className="mt-1 text-stat-sm font-semibold tracking-normal">Shared models, ready to use.</h1>
       </div>
 
       <Card className="rise shadow-[var(--shadow-raised)]" style={{ ["--d" as string]: "40ms" }}>
@@ -130,21 +130,21 @@ export default function Pool() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="eyebrow">{quota ? quota.name : "Your quota"}</p>
-              <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
+              <p className="mt-1 font-mono text-stat font-semibold tabular-nums">
                 {quota ? <>{compact(quota.monthlyUsed)} <span className="text-[var(--muted-foreground)]">/ {quota.monthlyBudget > 0 ? compact(quota.monthlyBudget) : "unlimited"}</span></> : <><span className="text-[var(--muted-foreground)]">— / —</span></>}
               </p>
-              <p className="mt-1 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              <p className="mt-1 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                 {quota ? `lifetime ${compact(quota.lifetimeUsed)}${quota.lifetimeBudget > 0 ? ` / ${compact(quota.lifetimeBudget)}` : ""}` : "paste your API key to see your quota"}
               </p>
             </div>
-            <span className="rounded-full bg-[var(--secondary)] px-3 py-1 font-mono text-[12px] tabular-nums text-[var(--primary)]">
+            <span className="rounded-full bg-[var(--secondary)] px-3 py-1 font-mono text-body tabular-nums text-[var(--primary-text)]">
               {quota && quota.monthlyBudget > 0 ? pct.toFixed(1) + "%" : "—"}
             </span>
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--muted)]">
             <div className="h-full rounded-full bg-[var(--primary)] transition-all" style={{ width: pct + "%" }} />
           </div>
-          <div className="mt-2 flex flex-wrap justify-between gap-2 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+          <div className="mt-2 flex flex-wrap justify-between gap-2 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
             <span>{quota ? `${fmt(quota.monthlyUsed)} used this month` : "0 used"}</span>
             <span>{quota?.monthlyBudget ? "monthly cap" : "ask admin for a key"}</span>
           </div>
@@ -161,8 +161,8 @@ export default function Pool() {
             <p className="eyebrow mb-1">Chat / completions</p>
             {models.map((m) => (
               <div key={m.id} className="flex items-center justify-between gap-2 rounded px-2 py-1 hover:bg-[var(--muted)]">
-                <code className="font-mono text-[12px]">{m.id}</code>
-                <span className="shrink-0 font-mono text-[10.5px] text-[var(--muted-foreground)]">{m.owned_by}</span>
+                <code className="font-mono text-body">{m.id}</code>
+                <span className="shrink-0 font-mono text-micro text-[var(--muted-foreground)]">{m.owned_by}</span>
               </div>
             ))}
           </CardContent>
@@ -177,7 +177,7 @@ export default function Pool() {
             {key ? (
               <>
                 <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--sunken)] px-3 py-2">
-                  <span className="truncate font-mono text-[12px] text-[var(--primary)]">{key.slice(0, 24)}…</span>
+                  <span className="truncate font-mono text-body text-[var(--primary-text)]">{key.slice(0, 24)}…</span>
                   <Button size="sm" variant="outline" onClick={() => copy("tok", key)}>
                     {copied === "tok" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} Copy
                   </Button>
@@ -188,26 +188,26 @@ export default function Pool() {
               <>
                 <div className="flex gap-2">
                   <input
-                    className="min-w-0 flex-1 rounded-md border border-[var(--input)] bg-[var(--background)] px-3 py-2 font-mono text-[12px] placeholder:text-[var(--muted-foreground)]"
+                    className="min-w-0 flex-1 rounded-md border border-[var(--input)] bg-[var(--background)] px-3 py-2 font-mono text-body placeholder:text-[var(--muted-foreground)]"
                     type="password" value={paste} onChange={(e) => setPaste(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && savePaste()}
                     placeholder="paste key given by admin" spellCheck={false} autoComplete="off"
                   />
                   <Button size="sm" variant="outline" onClick={savePaste} disabled={busy}>use this key</Button>
                 </div>
-                {err && <p className="mt-2 font-mono text-[12px] text-[var(--error)]">{err}</p>}
+                {err && <p className="mt-2 font-mono text-body text-[var(--error-text)]">{err}</p>}
               </>
             )}
             <div className="mt-3 border-t border-[var(--border)] pt-3">
               <p className="eyebrow mb-2">Quick start</p>
               <div className="mb-2 flex items-center gap-2">
-                <span className="font-mono text-[11px] text-[var(--muted-foreground)]">Base URL</span>
-                <code className="flex-1 truncate font-mono text-[12px]">{baseUrl}</code>
+                <span className="font-mono text-meta text-[var(--muted-foreground)]">Base URL</span>
+                <code className="flex-1 truncate font-mono text-body">{baseUrl}</code>
                 <Button size="sm" variant="ghost" onClick={() => copy("base", baseUrl)}>
                   {copied === "base" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 </Button>
               </div>
-              <pre className="max-h-48 overflow-auto rounded-md border border-[var(--border)] bg-[var(--sunken)] p-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">{curl}</pre>
+              <pre className="max-h-48 overflow-auto rounded-md border border-[var(--border)] bg-[var(--sunken)] p-2.5 text-meta leading-relaxed text-[var(--muted-foreground)]">{curl}</pre>
               <Button size="sm" variant="outline" onClick={() => copy("curl", curl)} className="mt-2">
                 {copied === "curl" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} Copy example
               </Button>
@@ -224,9 +224,9 @@ export default function Pool() {
           </CardHeader>
           <CardContent className="px-2">
             <div className="max-h-[480px] overflow-auto">
-              <table className="w-full table-fixed text-[12px]">
+              <table className="w-full table-fixed text-body">
                 <thead className="sticky-head">
-                  <tr className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
+                  <tr className="font-mono text-micro uppercase tracking-eyebrow text-[var(--muted-foreground)]">
                     <th className="px-3 py-2 text-left">time</th>
                     <th className="px-3 py-2 text-left">model</th>
                     <th className="px-3 py-2 text-right">in/out</th>
@@ -235,14 +235,14 @@ export default function Pool() {
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.length === 0 && <tr><td colSpan={5} className="px-3 py-2 font-mono text-[11px] text-[var(--muted-foreground)]">no requests yet</td></tr>}
+                  {logs.length === 0 && <tr><td colSpan={5} className="px-3 py-2 font-mono text-meta text-[var(--muted-foreground)]">no requests yet</td></tr>}
                   {logs.map((l) => (
                     <tr key={l.id} className="border-t border-[var(--hairline)]">
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{l.createdAt ? new Date(l.createdAt).toLocaleTimeString() : ""}</td>
-                      <td className="truncate px-3 py-2 font-mono text-[11px]">{l.model ? l.model.split("/").pop() : "—"}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{fmt(l.promptTokens)}↑ {fmt(l.completionTokens)}↓</td>
-                      <td className="px-3 py-2 text-right font-mono text-[11px] tabular-nums">{fmt(l.totalTokens)}</td>
-                      <td className={`px-3 py-2 text-right font-mono text-[11px] font-semibold ${l.status === "success" ? "text-[var(--success)]" : "text-[var(--error)]"}`}>{l.status}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{l.createdAt ? new Date(l.createdAt).toLocaleTimeString() : ""}</td>
+                      <td className="truncate px-3 py-2 font-mono text-meta">{l.model ? l.model.split("/").pop() : "—"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{fmt(l.promptTokens)}↑ {fmt(l.completionTokens)}↓</td>
+                      <td className="px-3 py-2 text-right font-mono text-meta tabular-nums">{fmt(l.totalTokens)}</td>
+                      <td className={`px-3 py-2 text-right font-mono text-meta font-semibold ${l.status === "success" ? "text-[var(--success-text)]" : "text-[var(--error-text)]"}`}>{l.status}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -259,12 +259,12 @@ export default function Pool() {
             </Button>
           </CardHeader>
           <CardContent className="max-h-[300px] space-y-2 overflow-y-auto">
-            {usage.length === 0 && <p className="font-mono text-[11px] text-[var(--muted-foreground)]">no usage recorded yet</p>}
+            {usage.length === 0 && <p className="font-mono text-meta text-[var(--muted-foreground)]">no usage recorded yet</p>}
             {usage.map((u) => (
               <div key={u.model}>
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate font-mono text-[12px]">{u.model}</span>
-                  <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{fmt(u.totalTokens)} · {u.totalRequests} req</span>
+                  <span className="truncate font-mono text-body">{u.model}</span>
+                  <span className="shrink-0 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{fmt(u.totalTokens)} · {u.totalRequests} req</span>
                 </div>
                 <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--muted)]">
                   <div className="h-full rounded-full bg-[var(--primary)]" style={{ width: Math.max(2, (u.totalTokens / max) * 100) + "%" }} />
@@ -275,7 +275,7 @@ export default function Pool() {
         </Card>
       </div>
       {flash && (
-        <div className="fixed bottom-7 left-1/2 -translate-x-1/2 rounded-full bg-[var(--foreground)] px-4 py-2 font-mono text-[12px] text-[var(--background)]">
+        <div className="fixed bottom-7 left-1/2 -translate-x-1/2 rounded-full bg-[var(--foreground)] px-4 py-2 font-mono text-body text-[var(--background)]">
           {flash}
         </div>
       )}

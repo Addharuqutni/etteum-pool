@@ -25,15 +25,15 @@ export function ConfigPreview({ config, label = "Generated configuration" }: Con
     <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-[var(--secondary)]/60">
         <button type="button" onClick={() => setOpen((value) => !value)} className="flex min-w-0 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] rounded">
-          <FileJson className="w-3.5 h-3.5 text-[var(--info)] shrink-0" />
-          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--foreground)] truncate">{label}</span>
+          <FileJson className="w-3.5 h-3.5 text-[var(--info-text)] shrink-0" />
+          <span className="text-micro font-medium uppercase tracking-eyebrow text-[var(--foreground)] truncate">{label}</span>
           <ChevronDown className={`w-3.5 h-3.5 text-[var(--muted-foreground)] transition-transform ${open ? "" : "-rotate-90"}`} />
         </button>
         <button type="button" onClick={handleCopy} className="p-1.5 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]" title="Copy generated configuration" aria-label="Copy generated configuration">
-          {copied ? <Check className="w-3.5 h-3.5 text-[var(--success)]" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? <Check className="w-3.5 h-3.5 text-[var(--success-text)]" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
       </div>
-      {open && <pre className="px-3 py-3 text-[11px] leading-relaxed font-mono text-[var(--foreground)] overflow-x-auto whitespace-pre max-h-64 overflow-y-auto">{content}</pre>}
+      {open && <pre className="px-3 py-3 text-meta leading-relaxed font-mono text-[var(--foreground)] overflow-x-auto whitespace-pre max-h-64 overflow-y-auto">{content}</pre>}
     </div>
   );
 }

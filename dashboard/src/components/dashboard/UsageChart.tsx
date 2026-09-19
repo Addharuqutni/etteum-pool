@@ -34,7 +34,7 @@ export default function UsageChart({ data = defaultData, colorsByModel = {} }: U
   if (data.length === 0) {
     // One line, no illustration. The operator knows what an empty chart means.
     return (
-      <div className="flex h-[260px] w-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--muted-foreground)]">
+      <div className="flex h-[260px] w-full items-center justify-center font-mono text-meta uppercase tracking-eyebrow text-[var(--muted-foreground)]">
         No traffic in this range
       </div>
     );
@@ -80,7 +80,7 @@ export default function UsageChart({ data = defaultData, colorsByModel = {} }: U
               return (
                 <div className="rounded-md border border-[var(--border)] bg-[var(--popover)] px-2.5 py-2 shadow-[var(--shadow-raised)]">
                   <div className="eyebrow mb-1.5">{label}</div>
-                  <table className="font-mono text-[11px]">
+                  <table className="font-mono text-meta">
                     <tbody>
                       {sorted.map((entry) => (
                         <tr key={entry.name}>

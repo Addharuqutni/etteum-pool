@@ -11,6 +11,7 @@ import {
   Bot,
   CreditCard,
   Globe,
+  MessagesSquare,
   Sparkles,
   Filter,
   Plug,
@@ -50,6 +51,7 @@ const navSections: NavSection[] = [
   {
     title: "TOOLS",
     items: [
+      { label: "Model Studio", path: "/model-studio", icon: MessagesSquare },
       { label: "Image Studio", path: "/image-studio", icon: Sparkles },
       { label: "Integration", path: "/integration", icon: Plug },
     ],
@@ -101,8 +103,10 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
   return (
       <aside
       className={cn(
-        "fixed top-0 left-0 h-screen bg-[var(--sidebar-bg)] border-r border-[var(--sidebar-border)] flex flex-col z-50 transition-[width,transform] duration-200 [transition-timing-function:var(--ease-out-expo)]",
-        collapsed ? "w-14" : "w-[228px]",
+        /* dvh, not vh: on mobile browsers the URL bar makes 100vh taller than
+           the visible viewport, which pushes the nav footer off-screen. */
+        "fixed top-0 left-0 z-overlay flex h-dvh flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] transition-[width,transform] duration-200 [transition-timing-function:var(--ease-out-expo)]",
+        collapsed ? "w-[var(--rail-collapsed)]" : "w-[var(--rail-width)]",
         open ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}
     >
@@ -116,7 +120,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
           <img src="/etteum.svg" alt="Etteum" className="w-5 h-5 flex-shrink-0" />
           {!collapsed && (
             <div className="min-w-0">
-              <div className="font-mono text-[13px] font-semibold leading-none tracking-[0.06em] text-[var(--foreground)]">
+              <div className="font-mono text-[length:var(--sidebar-wordmark-size)] font-semibold leading-none tracking-caps text-[var(--foreground)]">
                 ETTEUM
               </div>
               <div className="mt-1 flex items-center gap-1.5" role="status">
@@ -131,7 +135,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
                     boxShadow: wsStatus === "open" ? `0 0 6px ${wsMeta.color}` : undefined,
                   }}
                 />
-                <span className="font-mono text-[9px] tracking-[0.16em] text-[var(--muted-foreground)]">
+                <span className="font-mono text-[length:var(--sidebar-status-size)] tracking-[length:var(--sidebar-status-tracking)] text-[var(--muted-foreground)]">
                   {wsMeta.label}
                 </span>
               </div>
@@ -163,7 +167,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
         {/* Collapse handle — rides the seam between sidebar and content */}
         <button
           onClick={onToggleCollapse}
-          className="hidden md:flex absolute -right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 items-center justify-center rounded-sm bg-[var(--card)] border border-[var(--border)] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--primary)] hover:border-[var(--primary)]/40 active:scale-[0.97] z-10"
+          className="absolute -right-2.5 top-1/2 z-sticky hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded-sm border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] interactive hover:border-[var(--primary)]/40 hover:text-[var(--primary-text)] active:scale-[0.97] md:flex"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-expanded={!collapsed}
@@ -194,13 +198,13 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
                     end={item.path === "/"}
                     className={({ isActive }) =>
                       cn(
-                        "relative flex items-center gap-2.5 rounded-sm font-mono text-[12px] tracking-[0.02em] transition-[color,background-color] duration-150 [transition-timing-function:var(--ease-out-expo)]",
+                        "relative flex items-center gap-2.5 rounded-sm font-mono text-body tracking-[0.02em] transition-[color,background-color] duration-150 [transition-timing-function:var(--ease-out-expo)]",
                         collapsed ? "h-9 justify-center px-0" : "h-9 px-2.5 md:h-8",
                         isActive
                           ? // Active is stated three ways at once — full-height
                             // brand marker on the rail, tinted bed, brighter
                             // weight — so it survives a fast scan of 14 items.
-                            "bg-[var(--primary)]/[0.09] font-medium text-[var(--primary)] before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:bg-[var(--primary)]"
+                            "bg-[var(--primary)]/[0.09] font-medium text-[var(--primary-text)] before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:bg-[var(--primary)]"
                           : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
                       )
                     }
@@ -221,7 +225,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
         <button
           onClick={toggleTheme}
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-sm font-mono text-[12px] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)] hover:text-[var(--foreground)]",
+            "flex w-full items-center gap-2.5 rounded-sm font-mono text-body text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--secondary)] hover:text-[var(--foreground)]",
             collapsed ? "h-9 justify-center px-0" : "h-9 px-2.5 md:h-8"
           )}
           aria-label="Toggle theme"
@@ -234,7 +238,7 @@ export default function Sidebar({ onLogout, open, onClose, collapsed = false, on
           <button
             onClick={onLogout}
             className={cn(
-              "flex w-full items-center gap-2.5 rounded-sm font-mono text-[12px] text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive)]",
+              "flex w-full items-center gap-2.5 rounded-sm font-mono text-body text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:bg-[var(--destructive)]/10 hover:text-[var(--destructive-text)]",
               collapsed ? "h-9 justify-center px-0" : "h-9 px-2.5 md:h-8"
             )}
             title={collapsed ? "Sign out" : undefined}

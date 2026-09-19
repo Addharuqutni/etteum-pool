@@ -223,7 +223,7 @@ export function BinSelector({ value, onChange, onBinInfo }: BinSelectorProps) {
             <Badge variant="secondary">{binInfo.brand.toUpperCase()}</Badge>
             {binInfo.type && <Badge variant="outline">{binInfo.type}</Badge>}
           </div>
-          <div className="space-y-1 font-mono text-[11px] text-[var(--muted-foreground)]">
+          <div className="space-y-1 font-mono text-meta text-[var(--muted-foreground)]">
             <div>
               <span className="text-[var(--muted-foreground)]">BIN:</span>{' '}
               <span className="text-[var(--foreground)]">{binInfo.bin}</span>

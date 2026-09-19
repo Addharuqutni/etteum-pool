@@ -76,7 +76,7 @@ export default function AntigravityOAuthCallback() {
 
 
   return (
-    <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] p-8 flex items-center justify-center">
+    <div className="min-h-dvh bg-[var(--background)] text-[var(--foreground)] p-8 flex items-center justify-center">
       <Card className="max-w-md w-full p-8 space-y-6">
         <PageHeader title="Google Cloud Code Assist Login" />
 
@@ -84,7 +84,7 @@ export default function AntigravityOAuthCallback() {
           <div className="text-center space-y-4">
             <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
             <p className="text-[var(--muted-foreground)]">{message}</p>
-            <p className="text-sm text-[var(--muted-foreground)]">
+            <p className="text-body text-[var(--muted-foreground)]">
               This may take a few seconds while we provision your project.
             </p>
           </div>
@@ -92,20 +92,23 @@ export default function AntigravityOAuthCallback() {
 
         {status === "success" && (
           <div className="text-center space-y-4">
-            <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto" />
+            {/* Icon carries the success signal; the heading is plain text.
+                No "✓" glyph — the CheckCircle2 icon already says it, and
+                emoji-as-icon renders inconsistently across platforms. */}
+            <CheckCircle2 className="mx-auto h-12 w-12 text-[var(--success-text)]" aria-hidden />
             <div className="space-y-2">
-              <p className="font-medium text-lg">✓ Authentication Successful</p>
-              <p className="text-[var(--muted-foreground)] text-sm whitespace-pre-line">{message}</p>
+              <p className="font-medium text-title">Authentication Successful</p>
+              <p className="text-[var(--muted-foreground)] text-body whitespace-pre-line">{message}</p>
             </div>
           </div>
         )}
 
         {status === "error" && (
           <div className="text-center space-y-4">
-            <AlertCircle className="h-12 w-12 text-red-500 mx-auto" />
+            <AlertCircle className="mx-auto h-12 w-12 text-[var(--error-text)]" aria-hidden />
             <div className="space-y-2">
-              <p className="font-medium text-lg text-red-500">Authentication Failed</p>
-              <p className="text-[var(--muted-foreground)] text-sm">{error}</p>
+              <p className="font-medium text-title text-[var(--error-text)]">Authentication Failed</p>
+              <p className="text-[var(--muted-foreground)] text-body">{error}</p>
             </div>
             <Button onClick={() => navigate("/accounts")} variant="outline">
               Back to Accounts

@@ -272,7 +272,7 @@ export default function BotLogs() {
       </Card>
 
       {(totalProgress > 0 || totalQueued > 0) && (
-        <p className="flex items-center gap-2 border-l-2 border-[var(--warning)] bg-[var(--warning)]/6 px-3 py-2 font-mono text-[11px] text-[var(--warning)]">
+        <p className="flex items-center gap-2 border-l-2 border-[var(--warning)] bg-[var(--warning)]/6 px-3 py-2 font-mono text-meta text-[var(--warning-text)]">
           <Radio className="w-3.5 h-3.5 shrink-0" />
           {totalProgress} processing · {totalQueued} queued · streaming
         </p>
@@ -281,7 +281,7 @@ export default function BotLogs() {
       {failedAccounts.length > 0 && (
         <Card className="overflow-hidden border-[var(--error)]/30">
           <div className="flex items-center justify-between gap-3 border-b border-[var(--error)]/25 bg-[var(--error)]/6 px-3 py-2">
-            <span className="eyebrow flex items-center gap-1.5 text-[var(--error)]">
+            <span className="eyebrow flex items-center gap-1.5 text-[var(--error-text)]">
               <AlertTriangle className="w-3.5 h-3.5" /> Failed · {failedAccounts.length}
             </span>
             <Button variant="outline" size="sm" onClick={handleRetryAll}>
@@ -292,11 +292,11 @@ export default function BotLogs() {
             {failedAccounts.map((log) => (
               <div
                 key={`failed-${log.accountId || log.id}-${log.provider || "unknown"}`}
-                className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 border-t border-[var(--hairline)] px-4 py-2 font-mono text-[12px] first:border-t-0 md:grid-cols-[220px_120px_1fr_auto]"
+                className="grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 border-t border-[var(--hairline)] px-4 py-2 font-mono text-body first:border-t-0 md:grid-cols-[220px_120px_1fr_auto]"
               >
                 <div className="truncate text-[var(--foreground)]">{log.email || `#${log.accountId}`}</div>
                 <div className="text-[var(--muted-foreground)]">{providerLabel(log.provider)}</div>
-                <div className="col-span-2 truncate text-[var(--error)] md:col-span-1" title={log.error || log.message}>
+                <div className="col-span-2 truncate text-[var(--error-text)] md:col-span-1" title={log.error || log.message}>
                   {log.error || log.message}
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => handleRetry(log.accountId)} disabled={!log.accountId}>
@@ -311,7 +311,7 @@ export default function BotLogs() {
       {/* Primary surface: the operation log */}
       <Card className="overflow-hidden shadow-[var(--shadow-raised)]">
         <div className="max-h-[calc(100vh-22rem)] overflow-auto">
-          <table className="w-full border-collapse font-mono text-[12px]">
+          <table className="w-full border-collapse font-mono text-body">
             <thead className="sticky-head">
               <tr>
                 <th className="eyebrow px-4 py-2 text-left">Time</th>
@@ -336,8 +336,8 @@ export default function BotLogs() {
                     <td className="px-4 py-2 text-[var(--muted-foreground)] hidden lg:table-cell">{process.latest.step || process.operation}</td>
                     <td className="px-4 py-2 text-[var(--muted-foreground)]">
                       <div className="flex items-center gap-2">
-                        {processStatusLabel(process) === "success" && <CheckCircle className="w-3.5 h-3.5 shrink-0 text-[var(--success)]" />}
-                        {processStatusLabel(process) === "error" && <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-[var(--error)]" />}
+                        {processStatusLabel(process) === "success" && <CheckCircle className="w-3.5 h-3.5 shrink-0 text-[var(--success-text)]" />}
+                        {processStatusLabel(process) === "error" && <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-[var(--error-text)]" />}
                         {processStatusLabel(process) !== "success" && processStatusLabel(process) !== "error" && (process.latest.type === "login_progress" || process.latest.type === "queue_processing" || process.latest.type === "warmup_processing") && <span className="live-dot h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]" />}
                         <span className="min-w-0 flex-1 truncate">{process.latest.error || process.latest.message || "—"}</span>
                         <span className="shrink-0 tabular-nums text-[var(--muted-foreground)]">{process.events.length} steps</span>
@@ -352,11 +352,11 @@ export default function BotLogs() {
                           {process.events.map((log) => (
                             <div
                               key={`${log.id}-${log.timestamp}`}
-                              className="grid grid-cols-[68px_112px_1fr] gap-3 py-0.5 text-[11px]"
+                              className="grid grid-cols-[68px_112px_1fr] gap-3 py-0.5 text-meta"
                             >
                               <span className="tabular-nums text-[var(--muted-foreground)]">{formatTimeID(log.timestamp)}</span>
                               <span className="truncate text-[var(--muted-foreground)]">{log.step || statusLabel(log.type)}</span>
-                              <span className={log.error ? "text-[var(--error)]" : "text-[var(--foreground)]"}>{log.error || log.message || "—"}</span>
+                              <span className={log.error ? "text-[var(--error-text)]" : "text-[var(--foreground)]"}>{log.error || log.message || "—"}</span>
                             </div>
                           ))}
                         </div>
@@ -377,12 +377,12 @@ export default function BotLogs() {
         </div>
         {processes.length > perPage && (
           <div className="flex items-center justify-between border-t border-[var(--border)] px-3 py-2">
-            <p className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+            <p className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
               {(page - 1) * perPage + 1}–{Math.min(page * perPage, processes.length)} of {processes.length}
             </p>
             <div className="flex items-center gap-1.5">
               <Button variant="ghost" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</Button>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(processes.length / perPage)}</span>
+              <span className="font-mono text-meta tabular-nums text-[var(--muted-foreground)]">{page}/{Math.ceil(processes.length / perPage)}</span>
               <Button variant="ghost" size="sm" disabled={page >= Math.ceil(processes.length / perPage)} onClick={() => setPage(page + 1)}>Next</Button>
             </div>
           </div>
@@ -397,7 +397,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
     <div className="px-3 py-3">
       <div className="eyebrow">{label}</div>
       <div
-        className="mt-1.5 font-mono text-xl font-semibold leading-none tabular-nums"
+        className="mt-1.5 font-mono text-stat-sm font-semibold tabular-nums"
         style={{ color: tone || "var(--foreground)" }}
       >
         {value}

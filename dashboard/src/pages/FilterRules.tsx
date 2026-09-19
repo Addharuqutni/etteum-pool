@@ -132,7 +132,7 @@ export default function FilterRules() {
       />
 
       {message && (
-        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-[11px] text-[var(--foreground)]">
+        <p className="border-l-2 border-[var(--border)] bg-[var(--secondary)]/50 px-3 py-2 font-mono text-meta text-[var(--foreground)]">
           {message}
         </p>
       )}
@@ -157,7 +157,7 @@ export default function FilterRules() {
               <label htmlFor="rule-pattern" className="eyebrow mb-1.5 block">Pattern</label>
               <textarea
                 id="rule-pattern"
-                className="h-[76px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                className="h-[76px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 placeholder={form.isRegex ? "regex, case-insensitive" : "exact string to match"}
                 value={form.pattern}
                 onChange={(e) => setForm({ ...form, pattern: e.target.value })}
@@ -167,14 +167,14 @@ export default function FilterRules() {
               <label htmlFor="rule-replacement" className="eyebrow mb-1.5 block">Replacement</label>
               <textarea
                 id="rule-replacement"
-                className="h-[56px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                className="h-[56px] w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 ease-out placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 placeholder="empty removes the match"
                 value={form.replacement}
                 onChange={(e) => setForm({ ...form, replacement: e.target.value })}
               />
             </div>
             <div className="flex flex-wrap items-center gap-4">
-              <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
+              <label className="flex cursor-pointer items-center gap-2 font-mono text-body text-[var(--foreground)]">
                 <input
                   type="checkbox"
                   className="accent-[var(--primary)]"
@@ -183,7 +183,7 @@ export default function FilterRules() {
                 />
                 Regex
               </label>
-              <label className="flex cursor-pointer items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
+              <label className="flex cursor-pointer items-center gap-2 font-mono text-body text-[var(--foreground)]">
                 <input
                   type="checkbox"
                   className="accent-[var(--primary)]"
@@ -205,9 +205,9 @@ export default function FilterRules() {
           hairlines — not a stack of individually boxed cards. */}
       <Card className="overflow-hidden">
         {loading ? (
-          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">Loading…</p>
+          <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">Loading…</p>
         ) : data.rules.length === 0 ? (
-          <p className="px-4 py-3 font-mono text-[12px] text-[var(--muted-foreground)]">
+          <p className="px-4 py-3 font-mono text-body text-[var(--muted-foreground)]">
             No rules yet — add one to strip patterns before they reach the provider.
           </p>
         ) : (
@@ -217,7 +217,7 @@ export default function FilterRules() {
                 key={rule.id}
                 className={`flex items-center justify-between gap-3 border-t border-[var(--hairline)] px-3 py-2 transition-colors duration-150 ease-out first:border-t-0 hover:bg-[var(--secondary)]/40 ${rule.isActive ? "" : "opacity-55"}`}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-2.5 font-mono text-[12px]">
+                <div className="flex min-w-0 flex-1 items-center gap-2.5 font-mono text-body">
                   <span className="w-7 shrink-0 tabular-nums text-[var(--muted-foreground)]">{rule.sortOrder}</span>
                   <span
                     aria-hidden
@@ -269,7 +269,7 @@ export default function FilterRules() {
                     onClick={() => handleDelete(rule)}
                     title="Delete"
                     aria-label="Delete rule"
-                    className="hover:text-[var(--destructive)]"
+                    className="hover:text-[var(--destructive-text)]"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>

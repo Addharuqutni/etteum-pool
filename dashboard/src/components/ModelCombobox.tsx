@@ -40,16 +40,28 @@ function providerLabel(provider: string): string {
 }
 
 /**
- * Display name + accent color for a model's owner. Exported so the Combos chain
+ * Display name + accent colors for a model's owner. Exported so the Combos chain
  * rows can label a member with the same color the picker used when it was
  * chosen — two models with similar names from different providers never look
  * identical in the chain.
+ *
+ * Two roles, because one token can't do both: `accent` is the FILL (the rank
+ * dot, chart lines, tints) and `accentText` is the readable TEXT variant. In
+ * light mode the neon fills are near-invisible as type, so the label uses
+ * --chart-N-text while the dot keeps the vivid fill.
  */
-export function providerTag(owner: string): { label: string; accent: string } {
+export function providerTag(owner: string): {
+  label: string;
+  accent: string;
+  accentText: string;
+} {
   const key = providerKey(owner);
+  const base = providerVar[key] ?? "--muted-foreground";
   return {
     label: providerLabel(key),
-    accent: `var(${providerVar[key] ?? "--muted-foreground"})`,
+    accent: `var(${base})`,
+    accentText:
+      base === "--muted-foreground" ? `var(${base})` : `var(${base}-text)`,
   };
 }
 
@@ -66,7 +78,7 @@ function Highlight({ text, q }: { text: string; q: string }) {
   return (
     <>
       {text.slice(0, at)}
-      <mark className="bg-transparent font-medium text-[var(--primary)]">
+      <mark className="bg-transparent font-medium text-[var(--primary-text)]">
         {text.slice(at, at + q.length)}
       </mark>
       {text.slice(at + q.length)}
@@ -277,13 +289,13 @@ export default function ModelCombobox({
   };
 
   const triggerCls =
-    "flex w-full items-center justify-between gap-2 rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] transition-colors duration-150 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35";
+    "flex w-full items-center justify-between gap-2 rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body transition-colors duration-150 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35";
 
   // 40px rows on touch, back to terminal density on pointer devices. The ring is
   // inset so a keyboard walk down a long list is visible without the row jumping.
   // scroll-mt clears the sticky provider header when a row is scrolled into view.
   const rowCls = (checked: boolean) =>
-    `flex min-h-[40px] w-full scroll-mt-8 items-center justify-between gap-2 px-3 py-1.5 text-left font-mono text-[12px] transition-colors duration-150 hover:bg-[var(--secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/35 md:min-h-0 ${
+    `flex min-h-[40px] w-full scroll-mt-8 items-center justify-between gap-2 px-3 py-1.5 text-left font-mono text-body transition-colors duration-150 hover:bg-[var(--secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ring)]/35 md:min-h-0 ${
       checked ? "bg-[var(--secondary)]" : ""
     }`;
 
@@ -326,7 +338,7 @@ export default function ModelCombobox({
           </span>
           <span className="flex shrink-0 items-center gap-2">
             {showOwner && (
-              <span className="flex max-w-[7rem] items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+              <span className="flex max-w-[7rem] items-center gap-1.5 text-meta text-[var(--muted-foreground)]">
                 <span
                   aria-hidden
                   className="h-1 w-1 shrink-0 rounded-full"
@@ -343,11 +355,11 @@ export default function ModelCombobox({
                 chain position appears here, so the picker and the chain list
                 are visibly the same thing. */}
             {at !== undefined && (
-              <span className="font-mono text-[10px] font-medium tabular-nums text-[var(--primary)]">
+              <span className="font-mono text-micro font-medium tabular-nums text-[var(--primary-text)]">
                 #{at}
               </span>
             )}
-            {checked && <Check className="w-3.5 h-3.5 text-[var(--primary)]" />}
+            {checked && <Check className="w-3.5 h-3.5 text-[var(--primary-text)]" />}
           </span>
         </button>
       </li>
@@ -378,7 +390,7 @@ export default function ModelCombobox({
           {/* In multi mode the trigger otherwise says "Add models…" forever,
               even with six models chained — the count makes it report state. */}
           {multi && selectedCount > 0 && (
-            <span className="font-mono text-[11px] tabular-nums text-[var(--primary)]">
+            <span className="font-mono text-meta tabular-nums text-[var(--primary-text)]">
               {selectedCount} in chain
             </span>
           )}
@@ -392,7 +404,7 @@ export default function ModelCombobox({
           // popover is a flex column with its own max-height so the search box
           // and the count/Done footer are always reachable — only the row list
           // gives up height.
-          className={`absolute z-50 flex w-full flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)] shadow-lg ${
+          className={`absolute z-overlay flex w-full flex-col overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card)] shadow-lg ${
             drop.up ? "bottom-full mb-1" : "top-full mt-1"
           }`}
           style={{ maxHeight: drop.maxH }}
@@ -413,7 +425,7 @@ export default function ModelCombobox({
           <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border)] pl-2 pr-1 py-1.5">
             <Search
               className={`w-3.5 h-3.5 shrink-0 transition-colors duration-150 ${
-                q ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"
+                q ? "text-[var(--primary-text)]" : "text-[var(--muted-foreground)]"
               }`}
             />
             <input
@@ -423,7 +435,7 @@ export default function ModelCombobox({
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${options.length} models…`}
               aria-label="Search models"
-              className="w-full bg-transparent font-mono text-[12px] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]/70 focus:outline-none"
+              className="w-full bg-transparent font-mono text-body text-[var(--foreground)] placeholder:text-[var(--muted-faint)] focus:outline-none"
             />
             {/* Only present while filtering — a permanent X next to an empty
                 box reads as "clear the whole selection", which it is not.
@@ -449,7 +461,7 @@ export default function ModelCombobox({
               many survived, and stays put above the results. Multi only — the
               single-select footer already carries an `n of 190 models` count. */}
           {multi && q && filtered.length > 0 && (
-            <p className="shrink-0 border-b border-[var(--hairline)] bg-[var(--secondary)]/40 px-3 py-1 font-mono text-[10px] tabular-nums text-[var(--muted-foreground)]">
+            <p className="shrink-0 border-b border-[var(--hairline)] bg-[var(--secondary)]/40 px-3 py-1 font-mono text-micro tabular-nums text-[var(--muted-foreground)]">
               {filtered.length} {filtered.length === 1 ? "match" : "matches"} · grouping off while
               searching
             </p>
@@ -466,7 +478,7 @@ export default function ModelCombobox({
               <span className="text-[var(--muted-foreground)]">
                 — pass through (no mapping) —
               </span>
-              {!value && <Check className="w-3.5 h-3.5 text-[var(--primary)]" />}
+              {!value && <Check className="w-3.5 h-3.5 text-[var(--primary-text)]" />}
             </button>
           )}
 
@@ -493,18 +505,18 @@ export default function ModelCombobox({
                             next one pushes it out. In a 190-row list this is the
                             only thing telling you where you are. Opaque --card
                             background, or rows would ghost through it. */}
-                        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--hairline)] bg-[var(--card)] px-3 py-1.5">
+                        <div className="sticky top-0 z-sticky flex items-center justify-between gap-2 border-b border-[var(--hairline)] bg-[var(--card)] px-3 py-1.5">
                           <span
                             className="eyebrow rounded border px-1.5 py-0.5"
                             style={{
-                              color: tag.accent,
+                              color: tag.accentText,
                               borderColor: `color-mix(in srgb, ${tag.accent} 30%, transparent)`,
                               backgroundColor: `color-mix(in srgb, ${tag.accent} 12%, transparent)`,
                             }}
                           >
                             {tag.label}
                           </span>
-                          <span className="font-mono text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                          <span className="font-mono text-micro tabular-nums text-[var(--muted-foreground)]">
                             {list.length}
                           </span>
                         </div>
@@ -517,7 +529,7 @@ export default function ModelCombobox({
                   user's to fix; an empty option list is the system's, and saying
                   "no models match" for it would send them hunting a typo. */}
               {filtered.length === 0 && (
-                <li className="px-3 py-3 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                <li className="px-3 py-3 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                   {q ? (
                     <>
                       Nothing matches{" "}
@@ -549,7 +561,7 @@ export default function ModelCombobox({
               same order and wording, so nothing has to be reconciled by eye.
               Done is a real 40px target on touch and sits hard right, away from
               the count it would otherwise crowd. */}
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] pl-3 pr-1.5 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] pl-3 pr-1.5 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
             <span className="truncate py-1.5">
               {multi
                 ? `${selectedCount} in chain · ${options.length} available`
@@ -561,7 +573,7 @@ export default function ModelCombobox({
               <button
                 type="button"
                 onClick={close}
-                className="my-0.5 flex min-h-[36px] shrink-0 items-center rounded px-2 font-medium text-[var(--primary)] transition-[color,background-color,transform] duration-150 [transition-timing-function:var(--ease-out-expo)] hover:bg-[var(--primary)]/10 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35 md:min-h-0 md:py-1"
+                className="my-0.5 flex min-h-[36px] shrink-0 items-center rounded px-2 font-medium text-[var(--primary-text)] transition-[color,background-color,transform] duration-150 [transition-timing-function:var(--ease-out-expo)] hover:bg-[var(--primary)]/10 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35 md:min-h-0 md:py-1"
               >
                 Done
               </button>

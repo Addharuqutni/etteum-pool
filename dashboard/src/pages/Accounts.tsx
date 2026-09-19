@@ -1567,17 +1567,17 @@ export default function Accounts() {
           <>
             <span>{totals.accounts} accounts</span>
             <span aria-hidden className="text-[var(--border)]">·</span>
-            <span className={totals.active > 0 ? "text-[var(--success)]" : undefined}>{totals.active} active</span>
+            <span className={totals.active > 0 ? "text-[var(--success-text)]" : undefined}>{totals.active} active</span>
             {totals.pending > 0 && (
               <>
                 <span aria-hidden className="text-[var(--border)]">·</span>
-                <span className="text-[var(--warning)]">{totals.pending} pending</span>
+                <span className="text-[var(--warning-text)]">{totals.pending} pending</span>
               </>
             )}
             {totals.error > 0 && (
               <>
                 <span aria-hidden className="text-[var(--border)]">·</span>
-                <span className="text-[var(--error)]">{totals.error} error</span>
+                <span className="text-[var(--error-text)]">{totals.error} error</span>
               </>
             )}
           </>
@@ -1595,14 +1595,14 @@ export default function Accounts() {
       />
 
       {(message || error) && (
-        <p className={`border-l-2 px-3 py-2 font-mono text-[11px] ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"}`}>
+        <p className={`border-l-2 px-3 py-2 font-mono text-meta ${message ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success-text)]" : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error-text)]"}`}>
           {message || error}
         </p>
       )}
 
       {/* Queue status - Login only */}
       {(Number(queue?.active || 0) > 0 || Number(queue?.queued || 0) > 0) && (
-        <p className="border-l-2 border-[var(--warning)] bg-[var(--warning)]/8 px-3 py-2 font-mono text-[11px] text-[var(--warning)]">
+        <p className="border-l-2 border-[var(--warning)] bg-[var(--warning)]/8 px-3 py-2 font-mono text-meta text-[var(--warning-text)]">
           Login: {Number(queue?.active || 0)} running · {Number(queue?.queued || 0)} queued
         </p>
       )}
@@ -1617,7 +1617,7 @@ export default function Accounts() {
           >
             <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
               <h2 className="eyebrow truncate text-[var(--foreground)]">{labelProvider(stat.provider)}</h2>
-              <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              <span className="shrink-0 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                 {stat.total} accounts
               </span>
             </div>
@@ -1633,7 +1633,7 @@ export default function Accounts() {
             <div className="space-y-3 px-4 py-3">
               {/* Credits remaining */}
               <div className="space-y-1.5">
-                <div className="flex justify-between font-mono text-[11px]">
+                <div className="flex justify-between font-mono text-meta">
                   <span className="eyebrow">Credits</span>
                   <span className="tabular-nums text-[var(--foreground)]">
                     {stat.credits.remaining.toFixed(1)} / {stat.credits.total.toFixed(1)}
@@ -1648,7 +1648,7 @@ export default function Accounts() {
               {/* WarmUp progress - shown while warmup is active */}
               {warmupProgress[stat.provider] && warmupProgress[stat.provider].total > 0 && (
                 <div className="space-y-1.5">
-                  <div className="flex justify-between font-mono text-[11px]">
+                  <div className="flex justify-between font-mono text-meta">
                     <span className="eyebrow">WarmUp</span>
                     <span className="tabular-nums text-[var(--foreground)]">
                       {warmupProgress[stat.provider].completed} / {warmupProgress[stat.provider].total}
@@ -1667,10 +1667,10 @@ export default function Accounts() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex min-w-0 items-center gap-2">
-                  <Flame className={`h-3.5 w-3.5 shrink-0 ${autoWarmupEnabledFor(stat.provider) ? "text-[var(--warning)]" : "text-[var(--muted-foreground)]"}`} />
+                  <Flame className={`h-3.5 w-3.5 shrink-0 ${autoWarmupEnabledFor(stat.provider) ? "text-[var(--warning-text)]" : "text-[var(--muted-foreground)]"}`} />
                   <div className="min-w-0">
                     <p className="eyebrow">Auto WarmUp</p>
-                    <p className="font-mono text-[10px] leading-tight text-[var(--muted-foreground)]">
+                    <p className="font-mono text-micro leading-tight text-[var(--muted-foreground)]">
                       {autoWarmupEnabledFor(stat.provider)
                         ? autoWarmup?.nextRunAt
                           ? `next in ${countdownLabel()} · every ${autoWarmup.intervalMinutes}m`
@@ -1716,9 +1716,9 @@ export default function Accounts() {
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-2">
           <div className="flex min-w-0 items-center gap-2">
-            <Key className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+            <Key className="h-3.5 w-3.5 shrink-0 text-[var(--primary-text)]" />
             <h2 className="eyebrow text-[var(--foreground)]">Custom Providers (BYOK)</h2>
-            <span className="hidden font-mono text-[11px] tabular-nums text-[var(--muted-foreground)] sm:inline">
+            <span className="hidden font-mono text-meta tabular-nums text-[var(--muted-foreground)] sm:inline">
               <span aria-hidden className="text-[var(--border)]">│</span> {byokProviders.length} configured
             </span>
           </div>
@@ -1729,9 +1729,9 @@ export default function Accounts() {
 
         {byokProviders.length === 0 ? (
           <div className="rounded-md border border-dashed border-[var(--border)] px-4 py-8 text-center">
-            <Shield className="mx-auto h-6 w-6 text-[var(--muted-foreground)]/40" />
-            <p className="mt-2 font-mono text-[12px] text-[var(--foreground)]">No custom providers configured</p>
-            <p className="mt-1 font-mono text-[11px] text-[var(--muted-foreground)]">Bring your own key — route custom models through your own API keys.</p>
+            <Shield className="mx-auto h-6 w-6 text-[var(--muted-foreground)]" />
+            <p className="mt-2 font-mono text-body text-[var(--foreground)]">No custom providers configured</p>
+            <p className="mt-1 font-mono text-meta text-[var(--muted-foreground)]">Bring your own key — route custom models through your own API keys.</p>
             <Button size="sm" variant="outline" className="mt-3" onClick={() => setByokDialogOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> Add Your First Provider
             </Button>
@@ -1749,11 +1749,11 @@ export default function Accounts() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="eyebrow truncate text-[var(--foreground)]">{provider.label}</h3>
-                        <span className={`font-mono text-[10px] uppercase tracking-[0.08em] ${(provider.active_key_count || 0) > 0 ? "text-[var(--success)]" : "text-[var(--warning)]"}`}>
+                        <span className={`font-mono text-micro uppercase tracking-caps ${(provider.active_key_count || 0) > 0 ? "text-[var(--success-text)]" : "text-[var(--warning-text)]"}`}>
                           {(provider.active_key_count || 0) > 0 ? "● ready" : "○ no active key"}
                         </span>
                       </div>
-                      <p className="mt-1 truncate font-mono text-[11px] text-[var(--muted-foreground)]">{provider.base_url}</p>
+                      <p className="mt-1 truncate font-mono text-meta text-[var(--muted-foreground)]">{provider.base_url}</p>
                     </div>
                     <ChevronDown className="h-3.5 w-3.5 shrink-0 -rotate-90 text-[var(--muted-foreground)]" />
                   </div>
@@ -1774,7 +1774,7 @@ export default function Accounts() {
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <p className="eyebrow">Models</p>
-                      <p className="font-mono text-[10px] text-[var(--muted-foreground)]/70">click id to copy · ⚡ to test</p>
+                      <p className="font-mono text-micro text-[var(--muted-foreground)]">click id to copy · ⚡ to test</p>
                     </div>
                     <div className="flex max-h-20 flex-wrap gap-1 overflow-y-auto">
                       {byokChipModels(provider).slice(0, 10).map((model) => {
@@ -1783,13 +1783,13 @@ export default function Accounts() {
                         return (
                           <span
                             key={model}
-                            className={`inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 font-mono text-[11px] ${
+                            className={`inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 pl-2 pr-1 font-mono text-meta ${
                               mt?.state === "error"
-                                ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error)]"
+                                ? "border-[var(--error)]/30 bg-[var(--error)]/10 text-[var(--error-text)]"
                                 : mt?.state === "ok"
-                                  ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]"
+                                  ? "border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success-text)]"
                                   : configured
-                                    ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary)]/80"
+                                    ? "border-[var(--primary)]/20 bg-[var(--primary)]/[0.05] text-[var(--primary-text)]"
                                     : "border-dashed border-[var(--border)] bg-transparent text-[var(--muted-foreground)]"
                             }`}
                             title={mt?.error || (configured ? model : `${model} (discovered, not in routing list)`)}
@@ -1802,7 +1802,7 @@ export default function Accounts() {
                               {model}
                             </span>
                             {mt?.state === "ok" && mt.latency != null && (
-                              <span className="shrink-0 tabular-nums opacity-80">{mt.latency}ms</span>
+                              <span className="t-num shrink-0">{mt.latency}ms</span>
                             )}
                             <button
                               type="button"
@@ -1841,7 +1841,7 @@ export default function Accounts() {
                         );
                       })}
                       {byokChipModels(provider).length > 10 && (
-                        <span className="inline-flex items-center rounded-full border border-[var(--border)] px-2 py-0.5 font-mono text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                        <span className="inline-flex items-center rounded-full border border-[var(--border)] px-2 py-0.5 font-mono text-meta tabular-nums text-[var(--muted-foreground)]">
                           +{byokChipModels(provider).length - 10} more
                         </span>
                       )}
@@ -1859,7 +1859,7 @@ export default function Accounts() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]"
+                      className="border-[var(--info)]/30 text-[var(--info-text)] hover:bg-[var(--info)]/10 hover:text-[var(--info-text)]"
                       onClick={(e) => { e.stopPropagation(); handleTestByok(provider); }}
                     >
                       {byokTest[provider.id]?.state === "testing" ? (
@@ -1872,7 +1872,7 @@ export default function Accounts() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-[var(--error)]/30 text-[var(--error)] hover:bg-[var(--error)]/10 hover:text-[var(--error)]"
+                      className="border-[var(--error)]/30 text-[var(--error-text)] hover:bg-[var(--error)]/10 hover:text-[var(--error-text)]"
                       onClick={(e) => { e.stopPropagation(); handleDeleteByok(provider.id, provider.label); }}
                     >
                       <Trash2 className="h-3.5 w-3.5" /> Delete
@@ -1881,12 +1881,12 @@ export default function Accounts() {
                   {byokTest[provider.id] && (
                     <div
                       role="status"
-                      className={`border-l-2 px-3 py-2 font-mono text-[11px] ${
+                      className={`border-l-2 px-3 py-2 font-mono text-meta ${
                         byokTest[provider.id].state === "testing"
                           ? "border-[var(--border)] bg-[var(--secondary)]/50 text-[var(--muted-foreground)]"
                           : byokTest[provider.id].state === "ok"
-                            ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success)]"
-                            : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error)]"
+                            ? "border-[var(--success)] bg-[var(--success)]/8 text-[var(--success-text)]"
+                            : "border-[var(--error)] bg-[var(--error)]/8 text-[var(--error-text)]"
                       }`}
                     >
                       {byokTest[provider.id].state === "testing" &&
@@ -1909,7 +1909,7 @@ export default function Accounts() {
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--primary)]/10 text-[var(--primary)]">
+              <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--primary)]/10 text-[var(--primary-text)]">
                 <Key className="h-4.5 w-4.5" />
               </div>
               <div>
@@ -1934,7 +1934,7 @@ export default function Accounts() {
                   readOnly={byokEditId !== null}
                   className={`focus:ring-1 focus:ring-[var(--ring)] ${byokEditId ? 'bg-[var(--muted)] opacity-60' : ''}`}
                 />
-                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                   {byokEditId ? 'Prefix cannot be changed after creation' : 'Used as model prefix (e.g., "openrouter-gpt-4")'}
                 </p>
               </div>
@@ -1961,7 +1961,7 @@ export default function Accounts() {
                   <Plus className="h-3 w-3" /> Add Key
                 </Button>
               </div>
-              <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Multiple keys under the same provider prefix are load-balanced automatically. Existing keys are masked; leave them masked to keep the stored secret.
               </p>
 
@@ -1973,7 +1973,7 @@ export default function Accounts() {
                         value={keyRow.label}
                         onChange={(e) => updateByokKeyRow(index, { label: e.target.value })}
                         placeholder="key label e.g. main"
-                        className="h-8 flex-1 font-mono text-[11px]"
+                        className="h-8 flex-1 font-mono text-meta"
                       />
                       <button
                         type="button"
@@ -1986,7 +1986,7 @@ export default function Accounts() {
                       >
                         <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${keyRow.enabled ? "translate-x-5" : "translate-x-1"}`} />
                       </button>
-                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 text-[var(--error)]" onClick={() => removeByokKeyRow(index)}>
+                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 text-[var(--error-text)]" onClick={() => removeByokKeyRow(index)}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -2004,7 +2004,7 @@ export default function Accounts() {
                                 if (keyRow.key === BYOK_KEY_PLACEHOLDER) updateByokKeyRow(index, { key: "" });
                               }}
                               placeholder={byokEditId ? "Paste new key to replace, or keep masked" : "sk-..."}
-                              className="h-8 flex-1 font-mono text-[11px]"
+                              className="h-8 flex-1 font-mono text-meta"
                             />
                             <Button
                               type="button"
@@ -2021,12 +2021,12 @@ export default function Accounts() {
                         );
                       })()}
                       {keyRow.status && (
-                        <Badge variant="outline" className={keyRow.status === "active" && keyRow.enabled ? "border-[var(--success)]/30 text-[var(--success)]" : "border-[var(--warning)]/30 text-[var(--warning)]"}>
+                        <Badge variant="outline" className={keyRow.status === "active" && keyRow.enabled ? "border-[var(--success)]/30 text-[var(--success-text)]" : "border-[var(--warning)]/30 text-[var(--warning-text)]"}>
                           {keyRow.enabled ? keyRow.status : "disabled"}
                         </Badge>
                       )}
                     </div>
-                    {keyRow.errorMessage && <p className="text-[10px] text-[var(--error)] truncate">{keyRow.errorMessage}</p>}
+                    {keyRow.errorMessage && <p className="text-micro text-[var(--error-text)] truncate">{keyRow.errorMessage}</p>}
                   </div>
                 ))}
               </div>
@@ -2034,7 +2034,7 @@ export default function Accounts() {
 
             {/* Model Configuration */}
             <div className="space-y-2.5 rounded-md border border-[var(--hairline)] px-3 py-2.5">
-              <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--muted-foreground)]">Configuration</p>
+              <p className="font-mono text-micro font-medium uppercase tracking-eyebrow text-[var(--muted-foreground)]">Configuration</p>
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
@@ -2058,7 +2058,7 @@ export default function Accounts() {
                     <option value="round_robin">Round Robin</option>
                     <option value="sequential">Sequential</option>
                   </Select>
-                  <p className="text-[10px] text-[var(--muted-foreground)]">
+                  <p className="text-micro text-[var(--muted-foreground)]">
                     Per-provider BYOK setting. Round Robin distributes requests; Sequential prefers the first healthy key.
                   </p>
                 </div>
@@ -2083,9 +2083,9 @@ export default function Accounts() {
                   value={byokForm.models}
                   onChange={(e) => setByokForm({ ...byokForm, models: e.target.value })}
                   placeholder="gpt-4, claude-3-opus, llama-3"
-                  className="h-20 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="h-20 w-full resize-none rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                 />
-                <p className="font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">Comma-separated list of model IDs</p>
+                <p className="font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">Comma-separated list of model IDs</p>
               </div>
             </div>
 
@@ -2158,58 +2158,58 @@ export default function Accounts() {
           {addDialogProvider === "codex" ? (
             <div className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("instant")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "instant" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "instant" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Instant Login (Token)</button>
               {addDialogProvider === "codex" && <button onClick={() => handleSetCodexMode("pat")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >OAuth Login</button>}
               <button onClick={() => addDialogProvider === "codex" ? handleSetCodexMode("bulk") : setAddMode("bulk")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk (Email|Pass)</button>
               <button onClick={() => addDialogProvider === "codex" ? handleSetCodexMode("single") : setAddMode("single")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Single</button>
             </div>
           ) : addDialogProvider === "codebuddy" ? (
             <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:grid-cols-3">
               <button onClick={() => setAddMode("oauth")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "oauth" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "oauth" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >OAuth (access_token)</button>
               <button onClick={() => setAddMode("token")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Access Token</button>
               <button onClick={() => setAddMode("apikey")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >API Key (ck_...)</button>
             </div>
           ) : addDialogProvider === "codebuddy-china" ? (
             <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:grid-cols-2">
               <button onClick={() => setAddMode("token")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "token" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Access Token</button>
               <button onClick={() => setAddMode("apikey")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "apikey" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk API Key (ck_...)</button>
             </div>
           ) : addDialogProvider === "grok-cli" ? (
             <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("pat")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Device Code OAuth</button>
             </div>
           ) : addDialogProvider === "claude" ? (
             <div className="grid grid-cols-1 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("pat")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "pat" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Claude Code OAuth</button>
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] bg-[var(--secondary)]/50 p-1 sm:flex">
               <button onClick={() => setAddMode("bulk")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "bulk" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Bulk (Email|Pass)</button>
               <button onClick={() => setAddMode("single")}
-                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.06em] transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
+                className={`min-w-0 flex-1 rounded-[4px] px-2 py-1.5 text-center font-mono text-meta uppercase tracking-caps transition-colors duration-150 sm:px-3 ${addMode === "single" ? "bg-[var(--background)] text-[var(--foreground)] ring-1 ring-[var(--border)]" : "text-[var(--muted-foreground)] hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"}`}
               >Single</button>
             </div>
           )}
@@ -2222,7 +2222,7 @@ export default function Accounts() {
                 <textarea
                   value={codebuddyChinaBulkApiKeys}
                   onChange={(e) => setCodebuddyChinaBulkApiKeys(e.target.value)}
-                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="ck_fpigz68zr75s...
 ck_abc123def456...
 ck_xyz789ghi012..."
@@ -2244,7 +2244,7 @@ ck_xyz789ghi012..."
 
           {addMode === "token" && addDialogProvider === "codebuddy-china" && (
             <div className="space-y-4">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Paste <code>access_token</code> (JWT) dari CodeBuddy CN (<code>www.codebuddy.cn</code>). User id dibaca
                 otomatis dari klaim JWT. <code>refresh_token</code> opsional untuk rotasi token.
               </div>
@@ -2253,7 +2253,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={codebuddyChinaAccessToken}
                   onChange={(e) => setCodebuddyChinaAccessToken(e.target.value)}
-                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="eyJhbGciOiJSUzI1NiIs..."
                   disabled={codebuddyChinaTokenBusy}
                 />
@@ -2273,7 +2273,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={codebuddyChinaRefreshToken}
                   onChange={(e) => setCodebuddyChinaRefreshToken(e.target.value)}
-                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="eyJhbGciOiJIUzUxMiIs..."
                   disabled={codebuddyChinaTokenBusy}
                 />
@@ -2289,7 +2289,7 @@ ck_xyz789ghi012..."
 
           {addMode === "oauth" && addDialogProvider === "codebuddy" && (
             <div className="space-y-4">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Login CodeBuddy global (<code>www.workbuddy.ai</code>) via OAuth device flow. Browser akan terbuka —
                 login pakai akun CodeBuddy, lalu <code>access_token</code> otomatis diambil dan akun ditambahkan.
               </div>
@@ -2320,7 +2320,7 @@ ck_xyz789ghi012..."
 
           {addMode === "token" && addDialogProvider === "codebuddy" && (
             <div className="space-y-4">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Paste <code>access_token</code> (JWT) dari CodeBuddy. Email &amp; user id dibaca otomatis dari klaim JWT.
                 <code className="ml-1">refresh_token</code> opsional untuk rotasi token.
               </div>
@@ -2329,7 +2329,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={codebuddyAccessToken}
                   onChange={(e) => setCodebuddyAccessToken(e.target.value)}
-                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-28 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="eyJhbGciOiJSUzI1NiIs..."
                   disabled={codebuddyTokenBusy}
                 />
@@ -2339,7 +2339,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={codebuddyRefreshToken}
                   onChange={(e) => setCodebuddyRefreshToken(e.target.value)}
-                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-20 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder="eyJhbGciOiJIUzUxMiIs..."
                   disabled={codebuddyTokenBusy}
                 />
@@ -2360,7 +2360,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={codebuddyBulkApiKeys}
                   onChange={(e) => setCodebuddyBulkApiKeys(e.target.value)}
-                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder={"ck_frxegm1rvitc...\nck_abc123def456...\nck_xyz789ghi012..."}
                   disabled={codebuddyBusy}
                 />
@@ -2380,7 +2380,7 @@ ck_xyz789ghi012..."
 
           {addMode === "pat" && addDialogProvider === "claude" && (
             <div className="space-y-4">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Claude Code OAuth (PKCE). Login di browser Claude Pro/Max, lalu paste code dari success page
                 (<code className="mx-1">CODE</code> atau <code>CODE#STATE</code>.
                 Models: <code>cc-claude-opus-4-8</code>, <code>cc-claude-sonnet-4-6</code>, <code>cc-claude-haiku-4-5</code>.
@@ -2403,7 +2403,7 @@ ck_xyz789ghi012..."
                       value={claudeOauthCode}
                       onChange={(e) => setClaudeOauthCode(e.target.value)}
                       placeholder="paste code or CODE#STATE"
-                      className="mt-1.5 font-mono text-[12px]"
+                      className="mt-1.5 font-mono text-body"
                       disabled={claudeOauthBusy}
                     />
                   </div>
@@ -2425,7 +2425,7 @@ ck_xyz789ghi012..."
 
           {addMode === "pat" && addDialogProvider === "grok-cli" && (
             <div className="space-y-4">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Device code flow (no browser password bot). Open verification URL, enter the code, wait until account becomes active.
                 Models: <code>grok-4.5</code>, <code>grok-4.5-high/medium/low</code>.
               </div>
@@ -2434,7 +2434,7 @@ ck_xyz789ghi012..."
                   <div>
                     <label className="eyebrow">User code</label>
                     <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-                      <code className="flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 font-mono text-[16px] tracking-[0.3em] tabular-nums text-[var(--foreground)]">
+                      <code className="flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 py-2 font-mono text-display tracking-[0.3em] tabular-nums text-[var(--foreground)]">
                         {grokCliUserCode}
                       </code>
                       <Button size="sm" variant="outline" onClick={() => safeCopyText(grokCliUserCode, "User code copied")}>Copy</Button>
@@ -2469,7 +2469,7 @@ ck_xyz789ghi012..."
 
           {addMode === "pat" && addDialogProvider === "codex" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Login Codex bisa via popup OpenAI atau mode manual: generate auth URL, buka, lalu paste callback URL.
               </div>
 
@@ -2499,7 +2499,7 @@ ck_xyz789ghi012..."
                     />
                   </div>
 
-                  <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                  <div className="space-y-1.5 rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                     <p><span className="text-[var(--foreground)]">Callback:</span> <code className="break-all">{codexLoopbackUrl}</code></p>
                     <p><span className="text-[var(--foreground)]">Contoh:</span> <code className="break-all">{codexCallbackExample}</code></p>
                   </div>
@@ -2533,7 +2533,7 @@ ck_xyz789ghi012..."
           {/* Antigravity OAuth mode */}
           {addMode === "oauth" && addDialogProvider === "antigravity" && (
             <div className="space-y-3">
-              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+              <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                 Login Antigravity via Google OAuth. Pilih popup (recommended) atau manual untuk generate auth URL terlebih dahulu.
               </div>
 
@@ -2582,7 +2582,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={instantTokens}
                   onChange={(e) => setInstantTokens(e.target.value)}
-                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder={"eyJhbGciOiJSUzI1NiIs..."}
                 />
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">Paste Codex refresh tokens (rt_*) per baris. Email otomatis di-extract dari token.</p>
@@ -2602,7 +2602,7 @@ ck_xyz789ghi012..."
                 <textarea
                   value={bulkText}
                   onChange={(e) => setBulkText(e.target.value)}
-                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-[12px] leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-foreground)]/70 hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
+                  className="mt-2 min-h-32 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--background)] px-2.5 py-2 font-mono text-body leading-relaxed text-[var(--foreground)] transition-colors duration-150 placeholder:text-[var(--muted-faint)] hover:border-[var(--muted)] focus-visible:border-[var(--ring)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]/35"
                   placeholder={"email@example.com|password123\nanother@example.com|pass456"}
                 />
               </div>
@@ -2614,7 +2614,7 @@ ck_xyz789ghi012..."
                 </Select>
               </div>
               <div className="flex gap-4">
-                <label className="flex items-center gap-2 font-mono text-[12px] text-[var(--foreground)]">
+                <label className="flex items-center gap-2 font-mono text-body text-[var(--foreground)]">
                   <input type="checkbox" checked={bulkHeadless} onChange={(e) => setBulkHeadless(e.target.checked)} className="h-4 w-4 rounded border-[var(--border)]" />
                   Run browser headless
                 </label>
@@ -2639,7 +2639,7 @@ ck_xyz789ghi012..."
           {/* Single mode (all providers) */}
            {addMode === "single" && (
              <div className="space-y-4">
-               <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+               <div className="rounded-md border border-[var(--hairline)] px-3 py-2.5 font-mono text-meta leading-relaxed text-[var(--muted-foreground)]">
                  Login Antigravity via Google OAuth untuk mendapatkan akses token + project ID otomatis.<br/>
                  Gunakan tombol “Start OAuth Login” di bawah ini untuk memulai flow authentication.
                </div>
@@ -2688,7 +2688,7 @@ function Stat({ label, value, tone }: { label: string; value: string | number; t
     <div className="px-3 py-3">
       <div className="eyebrow">{label}</div>
       <div
-        className={`mt-1.5 truncate font-mono font-semibold leading-none tabular-nums ${isWord ? "text-[13px]" : "text-xl"}`}
+        className={`mt-1.5 truncate font-mono font-semibold leading-none tabular-nums ${isWord ? "text-lead" : "text-stat-sm"}`}
         style={{ color: tone || "var(--foreground)" }}
       >
         {value}
