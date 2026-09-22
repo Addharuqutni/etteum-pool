@@ -35,9 +35,12 @@ export default function Login({ onLogin }: LoginProps) {
   }
 
   return (
-    /* Off-center on purpose: the panel sits on a left-anchored column so it
-       reads as a terminal prompt, not a centered marketing hero. */
-    <div className="flex min-h-dvh items-center justify-center p-4 sm:justify-start sm:px-[12vw]">
+    /* Centred. The panel used to be pinned 12vw from the left on `sm`+ with a
+       comment claiming it "reads as a terminal prompt" — but at 1920px that
+       put the card 560px left of centre, and the offset grew with the
+       viewport, so it looked broken rather than deliberate. On a single-card
+       screen there is no layout reason to off-centre it. */
+    <div className="flex min-h-dvh items-center justify-center p-4">
       <div className="w-full max-w-[340px]">
         {/* Wordmark line — mono, inline, no icon tile with a glow behind it */}
         <div className="mb-5 flex items-baseline gap-2.5">

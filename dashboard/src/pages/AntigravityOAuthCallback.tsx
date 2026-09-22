@@ -76,13 +76,26 @@ export default function AntigravityOAuthCallback() {
 
 
   return (
-    <div className="min-h-dvh bg-[var(--background)] text-[var(--foreground)] p-8 flex items-center justify-center">
-      <Card className="max-w-md w-full p-8 space-y-6">
-        <PageHeader title="Google Cloud Code Assist Login" />
+    /* Centred like Login and the Codex callback. Padding steps down on small
+       screens so the card is not squeezed to the edge of a phone. */
+    <div className="flex min-h-dvh items-center justify-center bg-[var(--background)] p-4 text-[var(--foreground)] sm:p-8">
+      <Card className="w-full max-w-[340px] overflow-hidden shadow-[var(--shadow-raised)] sm:max-w-md">
+        {/* Same card-header pattern as the Codex callback: a hairline, a
+            15px mono caps title. PageHeader is a page-level component and
+            does not belong inside a card. */}
+        <div className="border-b border-[var(--border)] px-4 py-3">
+          <h1 className="font-mono text-title font-semibold uppercase leading-none tracking-caps text-[var(--foreground)]">
+            Google Cloud Code Assist Login
+          </h1>
+        </div>
 
+        <div className="space-y-6 px-4 py-4">
         {status === "loading" && (
-          <div className="text-center space-y-4">
-            <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
+          <div className="space-y-4 text-center">
+            {/* `text-primary` was a dead class — there is no --color-primary in
+                the theme, so the utility never existed and the spinner
+                rendered in the inherited colour. Use the token. */}
+            <Loader2 className="mx-auto h-12 w-12 animate-spin text-[var(--primary)]" aria-hidden />
             <p className="text-[var(--muted-foreground)]">{message}</p>
             <p className="text-body text-[var(--muted-foreground)]">
               This may take a few seconds while we provision your project.
@@ -115,6 +128,7 @@ export default function AntigravityOAuthCallback() {
             </Button>
           </div>
         )}
+        </div>
       </Card>
     </div>
   );

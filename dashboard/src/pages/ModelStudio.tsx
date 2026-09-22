@@ -604,17 +604,17 @@ export default function ModelStudio() {
             {visible.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                 <Bot className="h-10 w-10 text-[var(--muted-foreground)]" />
-                <p className="text-[13px] font-medium text-[var(--foreground)]">
+                <p className="text-lead font-medium text-[var(--foreground)]">
                   {model ? "New chat — ready when you are" : "Model Studio playground"}
                 </p>
-                <p className="max-w-sm text-[12px] text-[var(--muted-foreground)]">
+                <p className="max-w-sm text-body text-[var(--muted-foreground)]">
                   {model ? (
                     <>Type below to start a fresh session. Nothing is sent until you hit Send.</>
                   ) : (
                     <>
                       Pick a model above, then send a message. Sends go through the exact same
                       dispatch pipeline as real{" "}
-                      <code className="font-mono text-[11px]">/v1/chat/completions</code> traffic —
+                      <code className="font-mono text-meta">/v1/chat/completions</code> traffic —
                       sanitization, compression, sticky routing and logging all apply.
                     </>
                   )}
