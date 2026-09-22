@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:tokens": "bun scripts/check-type-tokens.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

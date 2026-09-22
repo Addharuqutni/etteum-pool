@@ -10,32 +10,36 @@ import { extendTailwindMerge } from "tailwind-merge";
  * inherits 16px — a failure that is invisible in the source and only shows up
  * when you measure the rendered DOM.
  *
- * Registering the scale under the `font-size` group (and our display tier)
- * makes `text-body` and `text-[var(--foreground)]` land in different groups,
- * so both survive. Keep this list in sync with the `@theme inline` block in
- * index.css.
+ * Registering the scale under the `font-size` group makes `text-body` and
+ * `text-[var(--foreground)]` land in different groups, so both survive.
+ *
+ * ⚠ Every new `--text-*` token must be added to BOTH this list and the
+ * `@theme inline` block in index.css. Miss this list and the class is silently
+ * deleted at runtime — which is exactly how `text-control` shipped broken on
+ * first attempt, leaving the login input at the 16px UA default.
  */
+const FONT_SIZE_TOKENS = [
+  "micro",
+  "meta",
+  "body",
+  "lead",
+  "title",
+  "display",
+  "stat-sm",
+  "stat",
+  "hero",
+  "control",
+] as const;
+
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
-      "font-size": [
-        {
-          text: [
-            "micro",
-            "meta",
-            "body",
-            "lead",
-            "title",
-            "display",
-            "stat-sm",
-            "stat",
-            "hero",
-          ],
-        },
-      ],
+      "font-size": [{ text: [...FONT_SIZE_TOKENS] }],
     },
   },
 });
+
+export { FONT_SIZE_TOKENS };
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

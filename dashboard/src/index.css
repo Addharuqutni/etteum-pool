@@ -178,6 +178,16 @@
   --text-hero: 40px;
   --text-hero--line-height: 1;
 
+  /* ── Form control text ─────────────────────────────────────────────────
+   * 13px on pointer devices (matches --text-lead, keeps the console dense),
+   * but 16px on touch. iOS Safari force-zooms the viewport when a focused
+   * input/select/textarea computes below 16px, which yanks the layout just as
+   * the operator is trying to type. Applied via a media query in the base
+   * layer so every form control in the app is covered.
+   */
+  --text-control: 13px;
+  --text-control--line-height: 1.5;
+
   /* Tracking — uppercase mono needs air, lowercase prose does not. */
   --tracking-eyebrow: 0.14em;  /* .eyebrow, badges-as-labels */
   --tracking-caps: 0.08em;     /* uppercase titles, tabs, buttons */
@@ -375,6 +385,8 @@
   --text-stat--line-height: var(--text-stat--line-height);
   --text-hero: 40px;
   --text-hero--line-height: var(--text-hero--line-height);
+  --text-control: 13px;
+  --text-control--line-height: var(--text-control--line-height);
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -419,6 +431,20 @@ body {
   font-feature-settings: "tnum" 1, "zero" 1;          /* tabular-nums by default */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Form controls on touch ───────────────────────────────────────────────
+ * iOS Safari zooms the whole viewport when a focused form control's computed
+ * font-size is under 16px — the layout jumps mid-typing and the user has to
+ * pinch back out. Bumping to 16px on coarse pointers fixes it without
+ * loosening desktop density, where 13px is correct.
+ */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 /* Mono is the voice of data. Anything numeric, identifying or logged uses it. */

@@ -50,12 +50,21 @@ export default function Login({ onLogin }: LoginProps) {
 
         <div className="rounded-md border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-raised)]">
           <div className="border-b border-[var(--border)] px-4 py-3">
-            <h1 className="eyebrow">Authenticate</h1>
+            {/* A page heading, not an eyebrow. `.eyebrow` is a 10px micro
+                label — as an <h1> it gave the screen no title at all against
+                the 15px wordmark sitting right above it. */}
+            <h1 className="font-mono text-title font-semibold uppercase leading-none tracking-caps text-[var(--foreground)]">
+              Authenticate
+            </h1>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3 px-4 py-4">
             <div>
-              <label htmlFor="api-key" className="eyebrow mb-1.5 block">
+              {/* Field label: readable, not a 10px micro-label. */}
+              <label
+                htmlFor="api-key"
+                className="mb-1.5 block font-mono text-meta text-[var(--muted-foreground)]"
+              >
                 Admin key
               </label>
               <div className="relative">
@@ -65,18 +74,22 @@ export default function Login({ onLogin }: LoginProps) {
                   value={key}
                   onChange={(e) => { setKey(e.target.value); setError(null); }}
                   placeholder="sk-pool-…"
-                  className="pr-9 font-mono"
+                  className="pr-11 font-mono"
                   autoFocus
                   aria-invalid={error ? true : undefined}
                   aria-describedby={error ? "api-key-error" : undefined}
                 />
+                {/* 40x40 tap target. Was 28x28 — below the floor and easy to
+                    mis-tap, which matters because the whole point of this
+                    screen is getting one secret typed correctly. */}
                 <button
                   type="button"
                   onClick={() => setShowKey(!showKey)}
-                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm text-[var(--muted-foreground)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+                  className="absolute right-0 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-sm text-[var(--muted-foreground)] interactive hover:text-[var(--foreground)] focus-ring md:h-8 md:w-8"
                   aria-label={showKey ? "Hide key" : "Show key"}
+                  aria-pressed={showKey}
                 >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
