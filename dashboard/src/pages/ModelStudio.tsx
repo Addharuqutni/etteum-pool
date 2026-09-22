@@ -139,11 +139,17 @@ export default function ModelStudio() {
   const newChat = useCallback(() => {
     if (streaming) return;
     abortRef.current?.abort();
+    // Clearing activeId is what makes the NEXT send create a fresh session.
+    // Without it, saveTurn reuses the old id and the new turns are appended
+    // to the previous session's history.
+    setActiveId(null);
     setSession(null);
     setDraft(null);
     setInput("");
     setSidebarOpen(false);
     setError(null);
+    stickToBottom.current = true;
+    requestAnimationFrame(() => inputRef.current?.focus());
   }, [streaming]);
 
   const removeSession = useCallback(
@@ -163,7 +169,8 @@ export default function ModelStudio() {
   const saveTurn = useCallback(
     async (userMessage: StudioMessage, assistant: StudioMessage) => {
       let id = activeId;
-      const base = session?.messages ?? [];
+      // After "New chat" there is no session yet, so this turn creates one.
+      const base = id ? session?.messages ?? [] : [];
       try {
         if (!id) {
           const { data } = await createStudioSession({
@@ -310,6 +317,12 @@ export default function ModelStudio() {
       setError(err instanceof Error ? err.message : "Failed to clear messages");
     }
   }, [streaming, activeId, loadSessions]);
+
+  // Close the composer's "unsaved session" affordance as soon as a session
+  // exists, and keep the transcript pinned to the bottom after a new chat.
+  useEffect(() => {
+    stickToBottom.current = true;
+  }, [activeId]);
 
   const messages = session?.messages ?? [];
   const visible: Array<StudioMessage | { role: "assistant-draft" }> = useMemo(() => {
@@ -591,13 +604,20 @@ export default function ModelStudio() {
             {visible.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                 <Bot className="h-10 w-10 text-[var(--muted-foreground)]" />
-                <p className="text-lead font-medium text-[var(--foreground)]">
-                  Model Studio playground
+                <p className="text-[13px] font-medium text-[var(--foreground)]">
+                  {model ? "New chat — ready when you are" : "Model Studio playground"}
                 </p>
-                <p className="max-w-sm text-body text-[var(--muted-foreground)]">
-                  Sends through the exact same dispatch pipeline as real{" "}
-                  <code className="font-mono text-meta">/v1/chat/completions</code> traffic —
-                  sanitization, compression, sticky routing and logging all apply.
+                <p className="max-w-sm text-[12px] text-[var(--muted-foreground)]">
+                  {model ? (
+                    <>Type below to start a fresh session. Nothing is sent until you hit Send.</>
+                  ) : (
+                    <>
+                      Pick a model above, then send a message. Sends go through the exact same
+                      dispatch pipeline as real{" "}
+                      <code className="font-mono text-[11px]">/v1/chat/completions</code> traffic —
+                      sanitization, compression, sticky routing and logging all apply.
+                    </>
+                  )}
                 </p>
               </div>
             ) : (
